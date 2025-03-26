@@ -1,0 +1,60 @@
+services:
+
+  mysql:
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: admin
+      MYSQL_DATABASE: db_nuconnect
+    container_name: mysql
+    image: mysql:8.1
+    command:
+      - --init-file=/docker-entrypoint-initdb.d/init.sql  # Add this
+    volumes:
+      - mysql_volume:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql 
+    ports:
+      - "3307:3306"
+    networks:
+      - my-network
+    restart: unless-stopped
+
+  node-app:
+    container_name: node-app
+    build: ./node-app
+    networks:
+      - my-network
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+
+  nginx:
+    build: ./react-app  # <-- Fixed indentation (2 spaces)
+    ports:
+      - "8080:80"        # <-- Aligned under `ports` (2 spaces from parent)
+    networks:
+      - my-network
+    depends_on:
+      - node-app
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.0-M01  # Using official Redis image with specific version
+    container_name: redis
+    command: redis-server --requirepass redis_password_nuconnect
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_volume:/data
+    networks:
+      - my-network
+    restart: unless-stopped
+
+networks:
+  my-network:
+      name: networks
+      driver: bridge
+
+volumes:
+  mysql_volume:
+  redis_volume:
