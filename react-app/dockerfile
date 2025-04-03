@@ -1,16 +1,14 @@
 
 FROM nginx:latest
 
-# Remove default Nginx content
+
 RUN rm -rf /usr/share/nginx/html/*
 
-# Copy built React files
 COPY  /dist /usr/share/nginx/html
 
-# Copy Nginx config
 
 RUN rm -rf /etc/nginx/conf.d/default.conf
 COPY default.conf /etc/nginx/conf.d/default.conf
 
-# Optional: Set permissions
+
 RUN chmod -R 755 /usr/share/nginx/html

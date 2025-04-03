@@ -1,13 +1,16 @@
 const express = require('express');
-const bodyParser = require('body-parser');
+const http = require('http');
+const { initializeSocket } = require('./controllers/eventsController');
 require('dotenv').config();
 const db = require('./config/db');
 const { redisClient } = require('./config/redis');
 
 const app = express();
+const server = http.createServer(app);
 
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Import routes
 const indexRoutes = require('./routes/index');
@@ -27,6 +30,8 @@ process.on('unhandledRejection', (reason, promise) => {
     // Application specific logging, throwing an error, or other logic here
 });
 
-app.listen(3000, () => {
-    console.log('NU-Connect server is Running~~~');
+// Start the server
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`NU-Connect server is running on port ${PORT}`);
 });

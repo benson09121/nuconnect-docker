@@ -1,35 +1,44 @@
-const con = require('../config/db');
+const pool = require('../config/db');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 async function getUser(mail) {
-    return new Promise((resolve, reject) => {
-        con.query('SELECT * FROM tbl_user where email = ?', [mail], (err, rows) => {
-            if (err) return reject(err);
-            resolve(rows);
-        });
-    });
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('SELECT * FROM tbl_user WHERE email = ?', [mail]);
+        return rows;
+    } finally {
+        connection.release();
+    }
 }
 
 async function generateToken(email) {
-    return new Promise((resolve, reject) => {
-        con.query('SELECT * FROM tbl_user where email = ?', [email], (err, rows) => {
-            if (err) return reject(err);
-            const { user_id, email, f_name, l_name } = rows[0];
-            const result = { user_id, email, f_name, l_name };
-            const token = jwt.sign({ result }, process.env.JWT_SECRET, { expiresIn: '7d' });
-            resolve(token);
-        });
-    });
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('SELECT * FROM tbl_user WHERE email = ?', [email]);
+        if (!rows || rows.length === 0) { // Ensure rows is not undefined or empty
+            throw new Error('User not found');
+        }
+        const { user_id, email: userEmail, f_name, l_name } = rows[0]; // Use a different variable name for destructured email
+        const result = { user_id, email: userEmail, f_name, l_name };
+        const token = jwt.sign({ result }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        return token;
+    } finally {
+        connection.release();
+    }
 }
 
 async function createUser(id, mail, surname, givenName) {
-    return new Promise((resolve, reject) => {
-        con.query('INSERT INTO tbl_user (user_id, email, l_name, f_name) VALUES (?, ?, ?, ?)', [id, mail, surname, givenName], (err, rows) => {
-            if (err) return reject(err);
-            resolve(rows);
-        });
-    });
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'INSERT INTO tbl_user (user_id, email, l_name, f_name) VALUES (?, ?, ?, ?)',
+            [id, mail, surname, givenName]
+        );
+        return rows;
+    } finally {
+        connection.release();
+    }
 }
 
 module.exports = { getUser, generateToken, createUser };

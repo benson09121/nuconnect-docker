@@ -31,6 +31,4 @@ redisSubscriber.on('connect', () => {
     console.log('Connected to Redis subscriber');
 });
 
-let clients = [];
-
-module.exports = { redisClient, redisSubscriber, clients };
+module.exports = { redisClient, redisSubscriber };
