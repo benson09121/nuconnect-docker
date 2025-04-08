@@ -12,15 +12,11 @@ async function getEvents(req, res) {
 
 async function createEvent(req, res) {
     try {
-        const { user_id, title, description, venue, date, start_time, end_time, organization_id, department_id, type, status } = req.body;
-        const newEvent = await eventModel.createEvent(user_id, title, description, venue, date, start_time, end_time, organization_id, department_id, type, status);
+        const { user_id, title, description, venue, date, start_time, end_time, organization_id, status, type, is_open_to_all } = req.body;
+        const orgId = parseInt(organization_id, 10);
+        const newEvent = await eventModel.createEvent(user_id, title, description, venue, date, start_time, end_time, orgId, status, type, is_open_to_all);
 
-        // Publish the new event to Redis
-        redisClient.publish('events', JSON.stringify({ type: 'create', event: newEvent }));
-
-        // Refresh the cache
-        await eventModel.refreshCache();
-
+        // No cache updates or notifications here since the event is pending approval
         res.status(201).json(newEvent);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -29,7 +25,7 @@ async function createEvent(req, res) {
 
 async function registerEvent(req, res) {
     try {
-        const event_id = parseInt(req.body.event_id,10);
+        const event_id = parseInt(req.body.event_id, 10);
         const checkRegister = await eventModel.checkEventRegistration(event_id);
         if (checkRegister) {
             return res.status(400).json({ message: 'Already registered for this event' });
@@ -56,7 +52,6 @@ async function archiveEvent(req, res) {
 
         redisClient.publish('events', JSON.stringify({ type: 'archive', event_id }));
 
-        await eventModel.refreshCache();
         res.status(200).json({ message: 'Event Archived' });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -69,7 +64,7 @@ async function getSpecificEvent(req, res) {
         const userId = req.params.userId;
         const event = await eventModel.getSpecificEvent(eventId, userId);
         let attendees = await eventModel.getEventAttendees(eventId);
-        if (attendees){
+        if (attendees) {
             attendees = attendees[0][0];
         }
         if (!event) {
@@ -87,27 +82,29 @@ async function getSpecificEvent(req, res) {
     }
 }
 
-// SSE endpoint for real-time updates
-function sseUpdates(req, res) {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
+// // SSE endpoint for real-time updates
+// function sseUpdates(req, res) {
+//     const userId = req.userId; // Extract user_id from the authenticated request
 
-    const onMessage = (channel, message) => {
-        if (channel === 'events') {
-            res.write(`data: ${message}\n\n`);
-        }
-    };
+//     res.setHeader('Content-Type', 'text/event-stream');
+//     res.setHeader('Cache-Control', 'no-cache');
+//     res.setHeader('Connection', 'keep-alive');
 
-    redisSubscriber.on('message', onMessage);
-    redisSubscriber.subscribe('events');
+//     const onMessage = (channel, message) => {
+//         if (channel === `events:user:${userId}`) {
+//             res.write(`data: ${message}\n\n`);
+//         }
+//     };
 
-    req.on('close', () => {
-        redisSubscriber.unsubscribe('events');
-        redisSubscriber.removeListener('message', onMessage);
-        res.end();
-    });
-}
+//     redisSubscriber.on('message', onMessage);
+//     redisSubscriber.subscribe(`events:user:${userId}`);
+
+//     req.on('close', () => {
+//         redisSubscriber.unsubscribe(`events:user:${userId}`);
+//         redisSubscriber.removeListener('message', onMessage);
+//         res.end();
+//     });
+// }
 
 async function sseEventAttendees(req, res) {
     const eventId = parseInt(req.params.eventId, 10);
@@ -132,12 +129,59 @@ async function sseEventAttendees(req, res) {
     });
 }
 
+async function getTickets(req, res) {
+    try {
+        const getTicket = await eventModel.getTickets();
+        res.json(getTicket);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+
+}
+
+async function getOrganizations(req, res) {
+    try {
+        const organizations = await eventModel.getOrganizations();
+        res.json(organizations);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+}
+async function getUpcomingEvents(req, res) {
+    try {
+        const upcomingEvents = await eventModel.getUpcomingEvents();
+        res.json(upcomingEvents);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+}
+async function getUserOrganization(req, res) {
+    try {
+        const userOrganization = await eventModel.getUserOrganization();
+        res.json(userOrganization);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+}
+async function addCertificate(req, res) {
+    try {
+        const { event_id, filepath, pdf } = req.body;
+        const result = await eventModel.AddCertificate(event_id, filepath);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+}
+
 module.exports = {
     getEvents,
     createEvent,
     registerEvent,
     archiveEvent,
     getSpecificEvent,
-    sseUpdates,
-    sseEventAttendees
+    getTickets,
+    getOrganizations,
+    sseEventAttendees,
+    getUpcomingEvents,
+    getUserOrganization,
 };

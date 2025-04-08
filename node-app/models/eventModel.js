@@ -3,53 +3,39 @@ const { redisClient } = require('../config/redis');
 const { Auth } = require("../models/userIdModel");
 
 async function getAllEvents() {
-    const cacheKey = 'events:all';
-    const cachedEvents = await redisClient.get(cacheKey);
+    // const cacheKey = `events:user:${Auth.get_userId}`;
+    // const cachedEvents = await redisClient.get(cacheKey);
 
-    if (cachedEvents) {
-        return JSON.parse(cachedEvents);
-    }
+    // if (cachedEvents) {
+    //     return JSON.parse(cachedEvents);
+    // }
 
     const connection = await pool.getConnection();
     try {
-        const rows = await connection.query('CALL GetAllEvents;');
+        const [rows] = await connection.query('CALL GetAllEvents(?);', [Auth.get_userId]);
 
-        // Cache the result in Redis
-        await redisClient.set(cacheKey, JSON.stringify(rows[0][0]), 'EX', 3600); // Cache for 1 hour
-
-        return rows[0][0];
+        // Cache the events for the user
+        // await redisClient.set(cacheKey, JSON.stringify(rows), 'EX', 3600); // Cache for 1 hour
+        return rows[0];
     } finally {
         connection.release();
     }
 }
 
-async function refreshCache() {
-    const connection = await pool.getConnection();
-    try {
-        const rows = await connection.query(`CALL GetAllEvents;`);
-
-        // Update the cache in Redis
-        await redisClient.set('events:all', JSON.stringify(rows[0][0]), 'EX', 3600); // Cache for 1 hour
-    } finally {
-        connection.release();
-    }
-}
-
-async function createEvent(user_id, title, description, venue, date, start_time, end_time, organization_id, department_id, type, status) {
+async function createEvent(user_id, title, description, venue, date, start_time, end_time, organization_id, status, type, is_open_to_all) {
     const connection = await pool.getConnection();
     try {
         const [result] = await connection.query(
             'CALL CreateEvent(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
-            [user_id, title, description, venue, date, start_time, end_time, organization_id, department_id ?? null,type ?? 'Free', status ?? 'Pending']
+            [user_id, title, description, venue, date, start_time, end_time, organization_id, status ?? 'Pending', type ?? 'Free', is_open_to_all ?? 1]// 1 - 0
         );
         // Invalidate the cache
-        await redisClient.del('events:all');
-        return result[0][0]; 
+        await redisClient.del(`events:user:${user_id}`);
+        return result[0][0];
     } finally {
         connection.release();
     }
 }
-
 
 async function registerEvent(event_id) {
     const connection = await pool.getConnection();
@@ -96,7 +82,7 @@ async function getSpecificEvent(eventId, userId) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query(
-            'CALL GetSpecificEvent(?, ?)', 
+            'CALL GetSpecificEvent(?, ?)',
             [eventId, userId]
         );
         return rows[0][0];
@@ -108,7 +94,7 @@ async function getSpecificEvent(eventId, userId) {
 async function getEventAttendees(eventId) {
     const cacheKey = `events:attendees:${eventId}`;
     const cachedAttendees = await redisClient.get(cacheKey);
-    if(cachedAttendees) {
+    if (cachedAttendees) {
         return JSON.parse(cachedAttendees);
     }
     const connection = await pool.getConnection();
@@ -135,5 +121,65 @@ async function refreshAttendeesCache(eventId) {
         connection.release();
     }
 }
+async function getTickets() {
+    const connection = await pool.getConnection();
+    try {
 
-module.exports = { getAllEvents, createEvent, registerEvent, archiveEvent, getSpecificEvent, getEventAttendees, refreshCache, refreshAttendeesCache, checkEventRegistration };
+        const [rows] = await connection.query("Call GetUserEventRegistrations(?);", [Auth.get_userId]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+async function getOrganizations() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizations(?);', [Auth.get_userId]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+async function getUpcomingEvents() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetUpcomingEvents(?);', [Auth.get_userId]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
+async function getUserOrganization() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetUserOrganization(?);', [Auth.get_userId]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+async function AddCertificate(event_id, filepath) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL AddCertificate(?, ?);', [event_id, filepath]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
+module.exports = {
+    getAllEvents,
+    createEvent,
+    registerEvent,
+    archiveEvent,
+    getSpecificEvent,
+    getEventAttendees,
+    refreshAttendeesCache,
+    checkEventRegistration,
+    getTickets,
+    getOrganizations,
+    getUpcomingEvents,
+    getUserOrganization
+};

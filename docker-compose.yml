@@ -21,14 +21,22 @@ services:
   node-app:
     container_name: node-app
     build: ./node-app
+    volumes:
+      - /opt/certificates/templates:/app/templates
+      - /opt/certificates/generated:/app/generated
     networks:
       - my-network
     ports:
       - "3001:3000"
     restart: unless-stopped
+    depends_on:
+      - mysql
 
   nginx:
+    container_name: nginx
     build: ./react-app  
+    volumes:
+      - /opt/certificates/generated:/usr/share/nginx/html/generated
     ports:
       - "8080:80"
     networks:
