@@ -3,7 +3,9 @@ const http = require('http');
 const { initializeSocket } = require('./controllers/eventsController');
 require('dotenv').config();
 const db = require('./config/db');
+const fileUpload = require('express-fileupload');
 const { redisClient } = require('./config/redis');
+// const { scanner } = require('./config/clamav');
 
 const app = express();
 const server = http.createServer(app);
@@ -11,6 +13,14 @@ const server = http.createServer(app);
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(fileUpload({
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+    abortOnLimit: true,     // Required for large files
+    safeFileNames: true,
+    preserveExtension: true,
+    createParentPath: true,
+}));
+
 
 // Import routes
 const indexRoutes = require('./routes/index');

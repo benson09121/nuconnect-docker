@@ -201,27 +201,26 @@ CREATE TABLE tbl_event (
 
 CREATE TABLE tbl_certificate_template (
     template_id INT AUTO_INCREMENT PRIMARY KEY,
-    organization_id INT NOT NULL,
+    event_id INT NOT NULL UNIQUE, 
     template_path VARCHAR(255) NOT NULL,
+    uploaded_by VARCHAR(200) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
-    FOREIGN KEY (issuer_role_id) REFERENCES tbl_role(role_id)
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
+    FOREIGN KEY (uploaded_by) REFERENCES tbl_user(user_id) ON DELETE CASCADE
 );
 
 CREATE TABLE tbl_event_certificate (
     certificate_id INT AUTO_INCREMENT PRIMARY KEY,
     event_id INT NOT NULL,
     user_id VARCHAR(200) NOT NULL,
+    template_id INT NOT NULL,
     certificate_path VARCHAR(255) NOT NULL,
-    issuer_id VARCHAR(200) NOT NULL,  -- Who generated the cert (admin/user)
-    verification_code VARCHAR(50) UNIQUE,
-    revoked BOOLEAN DEFAULT FALSE,
+    verification_code VARCHAR(36) UNIQUE NOT NULL,
     issued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (issuer_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE,
-    UNIQUE KEY unique_cert_per_event (event_id, user_id)
+    FOREIGN KEY (template_id) REFERENCES tbl_certificate_template(template_id) ON DELETE CASCADE,
+    UNIQUE KEY unique_user_cert (event_id, user_id) -- One cert per user per event
 );
 
 CREATE TABLE tbl_event_course(
@@ -793,6 +792,47 @@ BEGIN
     ORDER BY o.name;
 END $$
 DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE AddCertificateTemplate(IN
+    p_event_id INT,
+    p_template_path VARCHAR(255),
+    p_uploaded_by VARCHAR(200)
+)
+BEGIN
+    INSERT INTO tbl_certificate_template (event_id, template_path, uploaded_by)
+    VALUES (p_event_id, p_template_path, p_uploaded_by);
+
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE AddGeneratedCertificate(IN
+    p_event_id INT,
+    p_user_id VARCHAR(200),
+    p_template_id INT,
+    p_certificate_path VARCHAR(255),
+    p_verification_code VARCHAR(36)
+)
+BEGIN
+
+    INSERT INTO tbl_event_certificate (event_id, user_id, template_id, certificate_path, verification_code)
+    VALUES (p_event_id, p_user_id, p_template_id, p_certificate_path, p_verification_code);
+
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetCertificateTemplate(IN
+    p_event_id INT
+)
+BEGIN
+    
+    SELECT * FROM tbl_certificate_template WHERE event_id = p_event_id;
+    
+END $$
+DELIMITER ;
+ 
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
 CREATE INDEX idx_event_program ON tbl_event_course(program_id);

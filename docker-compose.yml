@@ -18,12 +18,24 @@ services:
       - my-network
     restart: unless-stopped
 
+  # clamav:
+  #   image: clamav/clamav:1.0
+  #   container_name: clamav
+  #   ports:
+  #     - "3310:3310"
+  #   volumes:
+  #     - clamav_data:/var/lib/clamav
+  #   networks:
+  #     - my-network
+  #   command: ["clamd", "--foreground"]
+  #   restart: unless-stopped
+
   node-app:
     container_name: node-app
     build: ./node-app
     volumes:
-      - /opt/certificates/templates:/app/templates
-      - /opt/certificates/generated:/app/generated
+      - /opt/certificates/templates:/app/certificates/templates
+      - /opt/certificates/generated:/app/certificates/generated
     networks:
       - my-network
     ports:
@@ -36,7 +48,8 @@ services:
     container_name: nginx
     build: ./react-app  
     volumes:
-      - /opt/certificates/generated:/usr/share/nginx/html/generated
+      - /opt/certificates/generated:/usr/share/nginx/html/certificates/generated
+      - /opt/certificates/templates:/usr/share/nginx/html/certificates/templates
     ports:
       - "8080:80"
     networks:
@@ -56,6 +69,16 @@ services:
     networks:
       - my-network
     restart: unless-stopped
+  
+  # flask_app:
+  #   container_name: flask
+  #   build: ./converter
+  #   ports:
+  #     - "5000:5000"
+  #   environment:
+  #     - FLASK_ENV=production
+  #   networks:
+  #     - my-network
 
 networks:
   my-network:
@@ -65,3 +88,4 @@ networks:
 volumes:
   mysql_volume:
   redis_volume:
+  # clamav_data:

@@ -1,8 +1,42 @@
 FROM node:lts
+# FROM arm64v8/debian:bullseye-slim
+
+
+RUN apt-get update && apt-get install -y \
+    libreoffice \
+    fonts-croscore \
+    fonts-liberation \
+    fonts-dejavu \
+    fontconfig \
+    fonts-freefont-ttf \
+    fonts-noto \
+    fonts-roboto \
+    && rm -rf /var/lib/apt/lists/*
+
+
+RUN apt-get install -y fontconfig
+RUN fc-cache -f -v
+
+# ENV LIBREOFFICE_PROFILE=/tmp/libreoffice-profile
+# RUN mkdir -p $LIBREOFFICE_PROFILE && \
+#     chmod -R 777 $LIBREOFFICE_PROFILE
+
+
+COPY fonts/fonts.conf /etc/fonts/fonts.conf
+RUN fc-cache -fv && mkdir -p /tmp/fonts-cache && chmod 777 /tmp/fonts-cache
+
+RUN mkdir -p /app/certificates/templates /app/certificates/generated && \
+    chown -R node:node /app/certificates
+
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+
+RUN ls -ld /app/certificates && \
+    ls -l /app/certificates
+
+RUN npm install 
 COPY . .
+
 EXPOSE 3000
 CMD ["node", "server.js"]
 

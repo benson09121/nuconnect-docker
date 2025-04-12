@@ -159,10 +159,29 @@ async function getUserOrganization() {
         connection.release();
     }
 }
-async function AddCertificate(event_id, filepath) {
+async function AddCertificateTemplate(event_id, filepath) {
     const connection = await pool.getConnection();
     try {
-        const [rows] = await connection.query('CALL AddCertificate(?, ?);', [event_id, filepath]);
+        const [rows] = await connection.query('CALL AddCertificateTemplate(?, ?, ?);', [event_id, filepath, Auth.get_userId]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+async function getCertificateTemplate(event_id){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetCertificateTemplate(?);', [event_id]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
+async function addGeneratedCertificate(event_id,template_id, certificate_path, verification_code){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL AddGeneratedCertificate(?, ?, ?, ?, ?);', [event_id, Auth.get_userId, template_id, certificate_path, verification_code]);
         return rows[0];
     } finally {
         connection.release();
@@ -181,5 +200,8 @@ module.exports = {
     getTickets,
     getOrganizations,
     getUpcomingEvents,
-    getUserOrganization
+    getUserOrganization,
+    AddCertificateTemplate,
+    getCertificateTemplate,
+    addGeneratedCertificate
 };

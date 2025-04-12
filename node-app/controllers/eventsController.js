@@ -1,5 +1,12 @@
 const eventModel = require('../models/eventModel');
 const { redisClient, redisSubscriber } = require('../config/redis');
+const path = require('path');
+const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
+// const { scanner, virusCheck } = require('../config/clamav');
+const { Auth } = require("../models/userIdModel");
+const TemplateHandler = require('easy-template-x').TemplateHandler;
+const convertDocxToPdf = require('../config/convertToPdf');
 
 async function getEvents(req, res) {
     try {
@@ -165,10 +172,126 @@ async function getUserOrganization(req, res) {
 }
 async function addCertificate(req, res) {
     try {
-        const { event_id, filepath, pdf } = req.body;
-        const result = await eventModel.AddCertificate(event_id, filepath);
-        res.json(result);
+        console.log('addCertificate: Request received'); // Log entry point
+        const { event_id } = req.body;
+        console.log('addCertificate: event_id:', event_id); // Log event_id
+
+        if (!req.files || !req.files.file) {
+            console.error('addCertificate: No file uploaded');
+            return res.status(400).json({ message: 'No file uploaded' });
+        }
+
+        const uploadedFile = req.files.file;
+        console.log('addCertificate: Uploaded file details:', uploadedFile); // Log file details
+
+        const fileBuffer = uploadedFile.data;
+        console.log('addCertificate: File buffer size:', fileBuffer.length); // Log file buffer size
+
+        // Validate file type
+        if (!uploadedFile.mimetype.includes('application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/octet-stream')) {
+            console.error('addCertificate: Invalid file type:', uploadedFile.mimetype);
+            return res.status(400).json({ message: 'Only .docx files allowed' });
+        }
+
+        // Virus scan
+        // console.log('addCertificate: Starting virus scan');
+        // const isClean = await virusCheck(fileBuffer);
+        // if (!isClean) {
+        //     console.error('addCertificate: File contains malware');
+        //     return res.status(400).json({ error: 'File contains malware' });
+        // }
+        // console.log('addCertificate: Virus scan completed');
+
+        // Save template
+
+        
+        const filename = `event-${event_id}-template.docx`;
+        const templatePath = path.join('/app/certificates/templates', filename);
+        console.log('addCertificate: Saving file to path:', templatePath);
+
+        try {
+            fs.writeFileSync(templatePath, uploadedFile.data);
+            console.log('addCertificate: File saved successfully');
+        } catch (writeError) {
+            console.error('addCertificate: Error saving file:', writeError);
+            return res.status(500).json({ message: 'Error saving file', error: writeError.message });
+        }
+
+        // Database insert
+        console.log('addCertificate: Inserting template path into database');
+        await eventModel.AddCertificateTemplate(event_id, templatePath);
+        console.log('addCertificate: Database insert successful');
+
+        res.status(201).json({ path: templatePath });
     } catch (error) {
+        console.error('addCertificate: Unexpected error:', error); // Log unexpected errors
+        res.status(500).json({ message: 'An unexpected error occurred', error: error.message });
+    }
+}
+
+async function addGeneratedCertificate(req, res) {
+    try {
+        const { event_id } = req.body;
+        const verification_code = uuidv4();
+
+        // Get certificate template
+        const template = await eventModel.getCertificateTemplate(event_id);
+        if (!template || !template[0]) throw new Error('No template found for this event');
+        const templatePath = template[0].template_path; // Correctly access template_path
+        console.log('addGeneratedCertificate: Template path:', templatePath); // Log template path
+
+        // Validate and process DOCX template
+        const templateContent = fs.readFileSync(templatePath); // Synchronous read
+        if (!templateContent || templateContent.length === 0) {
+            throw new Error('Template file is empty or corrupted');
+        }
+
+        const data = {
+            name: `${Auth.get_first_name} ${Auth.get_last_name}`,
+        };
+       
+        
+
+        // Generate filenames
+        const safeFirstName = Auth.get_first_name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const safeLastName = Auth.get_last_name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const baseFilename = `Certificate_${safeFirstName}_${safeLastName}`;
+        const docxPath = path.join("/app/certificates/templates", `${baseFilename}_${verification_code}.docx`);
+        const pdfFilename = `${baseFilename}_${verification_code}.pdf`;
+        const pdfPath = path.join('/app/certificates/generated', pdfFilename);
+
+        // Save temporary DOCX
+        const handler = new TemplateHandler(templateContent);
+        const doc = await handler.process(templateContent, data);
+        fs.writeFileSync(docxPath, doc);
+
+        await convertDocxToPdf(docxPath, pdfPath);
+        fs.unlinkSync(docxPath);
+        fs.unlinkSync()
+        // await convertToPdf(docxPath, pdfPath, (err, result) => {
+        //     if (err) {
+        //         console.error('addGeneratedCertificate: Error converting to PDF:', err);
+        //         throw new Error('Error converting to PDF');
+        //     }
+        //     console.log('addGeneratedCertificate: PDF generated successfully:', result);
+        // });
+        
+
+
+        // Database insert
+        console.log(template[0].template_id);
+        const template_id = template[0].template_id;
+        await eventModel.addGeneratedCertificate({
+            event_id, 
+            template_id,
+            pdfPath,
+            verification_code,
+        });
+
+        res.status(201).json({ message: 'Certificate generated successfully', path: pdfPath });
+    } catch (error) {
+        console.error('addGeneratedCertificate: Error:', error.message);
         res.status(500).json({ message: error.message });
     }
 }
@@ -184,4 +307,6 @@ module.exports = {
     sseEventAttendees,
     getUpcomingEvents,
     getUserOrganization,
+    addCertificate,
+    addGeneratedCertificate,
 };
