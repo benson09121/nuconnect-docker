@@ -1,6 +1,6 @@
-const pool = require('../config/db');
-const { redisClient } = require('../config/redis');
-const { Auth } = require("../models/userIdModel");
+const pool = require('../../config/db');
+const { redisClient } = require('../../config/redis');
+const { Auth } = require("./userIdModel");
 
 async function getAllEvents() {
     // const cacheKey = `events:user:${Auth.get_userId}`;

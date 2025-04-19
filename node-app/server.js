@@ -1,6 +1,6 @@
 const express = require('express');
 const http = require('http');
-const { initializeSocket } = require('./controllers/eventsController');
+const { initializeSocket } = require('./mobile/controllers/eventsController');
 require('dotenv').config();
 const db = require('./config/db');
 const fileUpload = require('express-fileupload');
@@ -22,14 +22,15 @@ app.use(fileUpload({
 }));
 
 
-// Import routes
-const indexRoutes = require('./routes/index');
-const authRoutes = require('./routes/auth');
-const facebookRoutes = require('./routes/facebook');
-const eventRoutes = require('./routes/events');
-const organizationRoutes = require('./routes/organization');
+// Import Routes on Mobile
+const indexRoutes = require('./index');
+const authRoutes = require('./mobile/routes/auth');
+const facebookRoutes = require('./mobile/routes/facebook');
+const eventRoutes = require('./mobile/routes/events');
+const organizationRoutes = require('./mobile/routes/organization');
 
-// Use routes
+
+// Routes on Mobile
 app.use('/', indexRoutes);
 app.use('/api/mobile', authRoutes);
 app.use('/api/mobile', facebookRoutes);
