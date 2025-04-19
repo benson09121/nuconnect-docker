@@ -27,12 +27,14 @@ const indexRoutes = require('./routes/index');
 const authRoutes = require('./routes/auth');
 const facebookRoutes = require('./routes/facebook');
 const eventRoutes = require('./routes/events');
+const organizationRoutes = require('./routes/organization');
 
 // Use routes
 app.use('/', indexRoutes);
 app.use('/api/mobile', authRoutes);
 app.use('/api/mobile', facebookRoutes);
 app.use('/api/mobile', eventRoutes);
+app.use('/api/mobile', organizationRoutes);
 
 // Global error handler for unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {

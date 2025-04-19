@@ -254,33 +254,46 @@ CREATE TABLE tbl_project_heads (
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE
 );
 
-	CREATE TABLE tbl_feedback(
-	feedback_id INT AUTO_INCREMENT PRIMARY KEY,
-	event_id INT NOT NULL,
-	user_id VARCHAR(200) NOT NULL,
-	message TEXT NOT NULL,
-	created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-	FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
-	FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
-);
-
-CREATE TABLE tbl_feedback_question_group (
+CREATE TABLE tbl_evaluation_question_group (
     group_id INT AUTO_INCREMENT PRIMARY KEY,
     group_title VARCHAR(255) NOT NULL,
     group_description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    is_active BOOLEAN DEFAULT TRUE
 );
 
-CREATE TABLE tbl_feedback_question (
+CREATE TABLE tbl_evaluation_question (
     question_id INT AUTO_INCREMENT PRIMARY KEY,
-    feedback_id INT NOT NULL,
+    group_id INT NOT NULL,
     question_text TEXT NOT NULL,
-    question_type ENUM('textbox', 'likert') NOT NULL DEFAULT 'textbox',  -- Determines input type
-    group_id INT DEFAULT NULL,  -- Optional grouping of questions
-    question_order INT DEFAULT 0,  -- Order within the group or overall
+    question_type ENUM('textbox', 'likert_4') NOT NULL,
+    is_required BOOLEAN DEFAULT TRUE,
+    FOREIGN KEY (group_id) REFERENCES tbl_evaluation_question_group(group_id)
+);
+
+CREATE TABLE tbl_event_evaluation_config (
+    event_id INT NOT NULL,
+    group_id INT NOT NULL,
+    PRIMARY KEY (event_id, group_id),
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES tbl_evaluation_question_group(group_id)
+);
+
+CREATE TABLE tbl_evaluation (
+    evaluation_id INT AUTO_INCREMENT PRIMARY KEY,
+    event_id INT NOT NULL,
+    user_id VARCHAR(200) NOT NULL,
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id)
+);
+
+CREATE TABLE tbl_evaluation_response (
+    response_id INT AUTO_INCREMENT PRIMARY KEY,
+    evaluation_id INT NOT NULL,
+    question_id INT NOT NULL,
+    response_value TEXT NOT NULL, -- Stores JSON/text/numerical values
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (feedback_id) REFERENCES tbl_feedback(feedback_id) ON DELETE CASCADE,
-    FOREIGN KEY (group_id) REFERENCES tbl_feedback_question_group(group_id) ON DELETE SET NULL
+    FOREIGN KEY (evaluation_id) REFERENCES tbl_evaluation(evaluation_id)
 );
 
     CREATE TABLE tbl_application_field (
@@ -357,23 +370,21 @@ BEGIN
     FROM tbl_user 
     WHERE user_id = p_user_id;
 
-    -- Get all organizations the user belongs to (including committees and executives)
+    -- Get all organizations the user belongs to
     WITH UserOrganizations AS (
         SELECT organization_id 
         FROM tbl_organization_members 
         WHERE user_id = p_user_id
-        AND member_type IN ('Member', 'Executive', 'Committee')
         
         UNION
         
-        -- Get organizations through committee memberships
         SELECT c.organization_id 
         FROM tbl_committee_members cm
         JOIN tbl_committee c ON cm.committee_id = c.committee_id
         WHERE cm.user_id = p_user_id
     )
     
-    SELECT DISTINCT
+    SELECT
         e.event_id,
         e.title,
         e.user_id AS organizer_id,
@@ -391,24 +402,33 @@ BEGIN
             ELSE 'Restricted'
         END AS access_type,
         COALESCE(e.fee, 0) AS event_fee,
-        e.capacity
+        e.capacity,
+        CASE 
+            WHEN TIMESTAMP(e.date, e.end_time) < CURRENT_TIMESTAMP THEN 'Ended'
+            ELSE 'Upcoming'
+        END AS event_status,
+        e.certificate AS certificate_available
     FROM tbl_event e
-    LEFT JOIN tbl_organization o ON e.organization_id = o.organization_id
-    LEFT JOIN tbl_event_course ec ON e.event_id = ec.event_id
+    INNER JOIN tbl_organization o ON e.organization_id = o.organization_id
     LEFT JOIN UserOrganizations uo ON e.organization_id = uo.organization_id
     WHERE e.status = 'Approved'
-      AND e.date >= CURDATE()
       AND (
-          -- Open to all events
           e.is_open_to_all = TRUE
-          
-          -- Events matching user's program
-          OR (v_program_id IS NOT NULL AND ec.program_id = v_program_id)
-          
-          -- Events from user's organizations (direct membership or through committee)
+          OR EXISTS (
+              SELECT 1 
+              FROM tbl_event_course ec 
+              WHERE ec.event_id = e.event_id 
+                AND ec.program_id = v_program_id
+          )
           OR uo.organization_id IS NOT NULL
       )
-    ORDER BY e.date ASC, e.start_time ASC;
+    ORDER BY 
+        CASE 
+            WHEN TIMESTAMP(e.date, e.end_time) < CURRENT_TIMESTAMP THEN 1 
+            ELSE 0 
+        END,
+        e.date ASC,
+        e.start_time ASC;
 END $$
 DELIMITER ;
 
@@ -488,18 +508,16 @@ BEGIN
 
     START TRANSACTION;
 
-    -- Get organization's base course
     SELECT base_program_id INTO v_base_program_id 
     FROM tbl_organization 
     WHERE organization_id = p_organization_id;
 
-    -- Validate restriction compatibility
+
     IF p_is_open_to_all = FALSE AND v_base_program_id IS NULL THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Cannot create restricted event for open organization';
     END IF;
  
-    -- Create base event record
     INSERT INTO tbl_event (
         organization_id,
         user_id,
@@ -528,7 +546,6 @@ BEGIN
     
     SET v_event_id = LAST_INSERT_ID();
 
-    -- Handle course associations
     IF p_is_open_to_all = FALSE THEN
         INSERT INTO tbl_event_course (event_id, program_id)
         SELECT v_event_id, program_id
@@ -832,7 +849,105 @@ BEGIN
     
 END $$
 DELIMITER ;
- 
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetEvaluationQuestions(IN p_event_id INT)
+BEGIN
+    SELECT JSON_ARRAYAGG(
+        JSON_OBJECT(
+            'group_id', g.group_id,
+            'group_title', g.group_title,
+            'questions', (
+                SELECT JSON_ARRAYAGG(
+                    JSON_OBJECT(
+                        'question_id', q.question_id,
+                        'question_text', q.question_text,
+                        'question_type', q.question_type,
+                        'is_required', q.is_required
+                    )
+                )
+                FROM tbl_evaluation_question q
+                WHERE q.group_id = g.group_id
+            )
+        )
+    ) AS evaluation_form
+    FROM tbl_evaluation_question_group g
+    WHERE g.group_id IN (
+        SELECT group_id 
+        FROM tbl_event_evaluation_config 
+        WHERE event_id = p_event_id
+    )
+    AND g.is_active = TRUE;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE SubmitEvaluation(IN p_json_data JSON)
+BEGIN
+    DECLARE v_evaluation_id INT;
+    DECLARE v_user_id VARCHAR(200);
+    DECLARE v_event_id INT;
+    DECLARE v_question_count INT;
+    DECLARE v_counter INT DEFAULT 0;
+    DECLARE v_question_id INT;
+    DECLARE v_answer TEXT;
+    
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    -- Extract basic information
+    SET v_user_id = JSON_UNQUOTE(JSON_EXTRACT(p_json_data, '$.user_id'));
+    SET v_event_id = CAST(JSON_UNQUOTE(JSON_EXTRACT(p_json_data, '$.event_id')) AS UNSIGNED);
+
+    -- Create evaluation record
+    INSERT INTO tbl_evaluation (event_id, user_id)
+    VALUES (v_event_id, v_user_id);
+    SET v_evaluation_id = LAST_INSERT_ID();
+
+    -- Process Likert Scale Answers
+    SET v_question_count = JSON_LENGTH(p_json_data, '$.likert_scale');
+    WHILE v_counter < v_question_count DO
+        SET v_question_id = CAST(
+            JSON_UNQUOTE(JSON_EXTRACT(p_json_data, 
+                CONCAT('$.likert_scale[', v_counter, '].question_id')))
+            AS UNSIGNED
+        );
+        SET v_answer = JSON_UNQUOTE(JSON_EXTRACT(p_json_data, 
+            CONCAT('$.likert_scale[', v_counter, '].answer')));
+        
+        INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value)
+        VALUES (v_evaluation_id, v_question_id, v_answer);
+        
+        SET v_counter = v_counter + 1;
+    END WHILE;
+
+    -- Process Text Answers
+    SET v_counter = 0;
+    SET v_question_count = JSON_LENGTH(p_json_data, '$.text_answers');
+    WHILE v_counter < v_question_count DO
+        SET v_question_id = CAST(
+            JSON_UNQUOTE(JSON_EXTRACT(p_json_data, 
+                CONCAT('$.text_answers[', v_counter, '].question_id')))
+            AS UNSIGNED
+        );
+        SET v_answer = JSON_UNQUOTE(JSON_EXTRACT(p_json_data, 
+            CONCAT('$.text_answers[', v_counter, '].answer')));
+        
+        INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value)
+        VALUES (v_evaluation_id, v_question_id, v_answer);
+        
+        SET v_counter = v_counter + 1;
+    END WHILE;
+
+    COMMIT;
+END $$
+DELIMITER ;
+
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
 CREATE INDEX idx_event_program ON tbl_event_course(program_id);
@@ -870,3 +985,39 @@ VALUES (1, "900f929ec408cb4", "Member",null),
 (2, "86533891asdvf", "Executive",null),
 (2, "5fb95ed0a0d20daf","Member",1);
 
+INSERT INTO tbl_evaluation_question_group (group_title, group_description, is_active)
+VALUES 
+('Activity: Meeting/Seminar/Conference/Workshop/Quiz Bee/Competition/Sport fest, etc.', 'Question about activities', TRUE),
+('About the Speaker/Resource person', 'Feedback about event speakers/presenters', TRUE),
+('Meals', 'Feedback about meals', TRUE),
+('Handouts', 'Feedback about handouts', TRUE),
+('Transportation', 'Feedback about transportation', TRUE),
+('Comments and Suggestions', 'Feedback about the whole event', TRUE);
+
+INSERT INTO tbl_evaluation_question (question_text, question_type, group_id, is_required)
+VALUES
+('Is the activity relevant/important to you?', 'likert_4', 1, TRUE),
+('Is the program relevant to the course/you’re in?', 'likert_4', 1, TRUE),
+('Were the objectives clear and communicated before the activity?', 'likert_4', 1, TRUE),
+('Were the objectives met by the activity?', 'likert_4', 1, TRUE),
+('Was the venue proper for this kind of activity?', 'likert_4', 1, TRUE),
+('Did the activity start and end on time?', 'likert_4', 1, TRUE),
+('Did the organizers maintain an orderly environment all throughout the activity?', 'likert_4', 1, TRUE),
+('Was the event/activity well-advertised/properly announce?', 'likert_4', 1, TRUE),
+('Would you recommend this activity to your classmates/friends?', 'likert_4', 1, TRUE),
+('Do you want an activity like this to happen more often?', 'likert_4', 1, TRUE),
+('Overall evaluation', 'likert_4', 1, TRUE),
+('Was the speaker well-prepared and knowledgeable on the topic?', 'likert_4', 2, TRUE),
+('Did the speaker use different and appropriate methods in delivering the topic?', 'likert_4', 2, TRUE),
+('Was the speaker able to connect with the audience and catch their attention?', 'likert_4', 2, TRUE),
+('Were the meals/snacks provided enough to fill you?', 'likert_4', 3, TRUE),
+('Did the meals/snacks have a pleasant taste?', 'likert_4', 3, TRUE),
+('Are the handouts provided useful?', 'likert_4', 4, TRUE),
+('Is the printing of the handouts clear?', 'likert_4', 4, TRUE),
+('Did you feel safe during the travel to the venue?', 'likert_4', 5, TRUE),
+('Did you feel that the transportation provided is in good running condition?', 'likert_4', 5, TRUE),
+('Did you feel safe with the driver’s skills?', 'likert_4', 5, TRUE),
+('What important knowledge or information did you gain from this activity?', 'textbox', 6, TRUE),
+('What did you like most about the activity?', 'textbox', 6, TRUE),
+('What did you like least about the activity?', 'textbox', 6, TRUE),
+('Any other comments/suggestions for further improvement the activity?', 'textbox', 6, TRUE);

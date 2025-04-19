@@ -131,29 +131,10 @@ async function getTickets() {
         connection.release();
     }
 }
-async function getOrganizations() {
-    const connection = await pool.getConnection();
-    try {
-        const [rows] = await connection.query('CALL GetOrganizations(?);', [Auth.get_userId]);
-        return rows[0];
-    } finally {
-        connection.release();
-    }
-}
 async function getUpcomingEvents() {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetUpcomingEvents(?);', [Auth.get_userId]);
-        return rows[0];
-    } finally {
-        connection.release();
-    }
-}
-
-async function getUserOrganization() {
-    const connection = await pool.getConnection();
-    try {
-        const [rows] = await connection.query('CALL GetUserOrganization(?);', [Auth.get_userId]);
         return rows[0];
     } finally {
         connection.release();
@@ -168,7 +149,7 @@ async function AddCertificateTemplate(event_id, filepath) {
         connection.release();
     }
 }
-async function getCertificateTemplate(event_id){
+async function getCertificateTemplate(event_id) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetCertificateTemplate(?);', [event_id]);
@@ -178,11 +159,33 @@ async function getCertificateTemplate(event_id){
     }
 }
 
-async function addGeneratedCertificate(event_id,template_id, certificate_path, verification_code){
+async function addGeneratedCertificate({ event_id, template_id, pdfPath, verification_code }) {
+    const connection = await pool.getConnection();
+    try{
+    const [rows] = await connection.query('CALL AddGeneratedCertificate(?, ?, ?, ?, ?);', [event_id, Auth.get_userId ,template_id, pdfPath, verification_code]); // Ensure only 5 arguments are passed
+    return rows[0];
+    }
+    finally{
+        connection.release();
+    }
+}
+
+async function getEvaluation(event_id) {
     const connection = await pool.getConnection();
     try {
-        const [rows] = await connection.query('CALL AddGeneratedCertificate(?, ?, ?, ?, ?);', [event_id, Auth.get_userId, template_id, certificate_path, verification_code]);
+        const [rows] = await connection.query('CALL GetEvaluationQuestions(?);', [event_id]);
         return rows[0];
+    }
+    finally {
+        connection.release();
+    }
+}
+
+async function submitEvaluation(response) {
+    const connection = await pool.getConnection();
+    try {
+        const jsonData = JSON.stringify(response);
+        await connection.query('CALL SubmitEvaluation(?);', [jsonData]);
     } finally {
         connection.release();
     }
@@ -198,10 +201,10 @@ module.exports = {
     refreshAttendeesCache,
     checkEventRegistration,
     getTickets,
-    getOrganizations,
     getUpcomingEvents,
-    getUserOrganization,
     AddCertificateTemplate,
     getCertificateTemplate,
-    addGeneratedCertificate
+    addGeneratedCertificate,
+    getEvaluation,
+    submitEvaluation,
 };

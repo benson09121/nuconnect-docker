@@ -146,26 +146,10 @@ async function getTickets(req, res) {
 
 }
 
-async function getOrganizations(req, res) {
-    try {
-        const organizations = await eventModel.getOrganizations();
-        res.json(organizations);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-}
 async function getUpcomingEvents(req, res) {
     try {
         const upcomingEvents = await eventModel.getUpcomingEvents();
         res.json(upcomingEvents);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-}
-async function getUserOrganization(req, res) {
-    try {
-        const userOrganization = await eventModel.getUserOrganization();
-        res.json(userOrganization);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -230,7 +214,7 @@ async function addCertificate(req, res) {
     }
 }
 
-async function addGeneratedCertificate(req, res) {
+async function addGeneratedCertificate(req) {
     try {
         const { event_id } = req.body;
         const verification_code = uuidv4();
@@ -238,11 +222,10 @@ async function addGeneratedCertificate(req, res) {
         // Get certificate template
         const template = await eventModel.getCertificateTemplate(event_id);
         if (!template || !template[0]) throw new Error('No template found for this event');
-        const templatePath = template[0].template_path; // Correctly access template_path
-        console.log('addGeneratedCertificate: Template path:', templatePath); // Log template path
+        const templatePath = template[0].template_path;
 
         // Validate and process DOCX template
-        const templateContent = fs.readFileSync(templatePath); // Synchronous read
+        const templateContent = fs.readFileSync(templatePath);
         if (!templateContent || templateContent.length === 0) {
             throw new Error('Template file is empty or corrupted');
         }
@@ -250,8 +233,6 @@ async function addGeneratedCertificate(req, res) {
         const data = {
             name: `${Auth.get_first_name} ${Auth.get_last_name}`,
         };
-       
-        
 
         // Generate filenames
         const safeFirstName = Auth.get_first_name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
@@ -259,7 +240,7 @@ async function addGeneratedCertificate(req, res) {
         const baseFilename = `Certificate_${safeFirstName}_${safeLastName}`;
         const docxPath = path.join("/app/certificates/templates", `${baseFilename}_${verification_code}.docx`);
         const pdfFilename = `${baseFilename}_${verification_code}.pdf`;
-        const pdfPath = path.join('/app/certificates/generated', pdfFilename);
+        const pdfPath = `/app/certificates/generated/${pdfFilename}`;
 
         // Save temporary DOCX
         const handler = new TemplateHandler(templateContent);
@@ -268,30 +249,51 @@ async function addGeneratedCertificate(req, res) {
 
         await convertDocxToPdf(docxPath, pdfPath);
         fs.unlinkSync(docxPath);
-        fs.unlinkSync()
-        // await convertToPdf(docxPath, pdfPath, (err, result) => {
-        //     if (err) {
-        //         console.error('addGeneratedCertificate: Error converting to PDF:', err);
-        //         throw new Error('Error converting to PDF');
-        //     }
-        //     console.log('addGeneratedCertificate: PDF generated successfully:', result);
-        // });
-        
-
 
         // Database insert
-        console.log(template[0].template_id);
         const template_id = template[0].template_id;
         await eventModel.addGeneratedCertificate({
-            event_id, 
+            event_id,
             template_id,
             pdfPath,
             verification_code,
         });
 
-        res.status(201).json({ message: 'Certificate generated successfully', path: pdfPath });
+        return { message: 'Certificate generated successfully', path: pdfPath };
     } catch (error) {
         console.error('addGeneratedCertificate: Error:', error.message);
+        throw error; // Throw the error to be handled by the caller
+    }
+}
+
+async function getEvaluation(req,res) {
+    try {
+        const event_id = parseInt(req.params.eventId, 10);
+        const evaluation = await eventModel.getEvaluation(event_id);
+        if (!evaluation) {
+            return res.status(404).json({ message: 'Evaluation not found' });
+        }
+        res.json(evaluation);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+  }
+  
+async function submitEvaluation(req, res) {
+    try {
+        const response = req.body;
+        const event_id = req.body.event_id;
+        console.log(response);
+
+        await eventModel.submitEvaluation(response);
+
+        // Call addGeneratedCertificate and handle its result
+        const certificateResult = await addGeneratedCertificate({ body: { event_id } });
+        console.log(certificateResult);
+
+        res.status(201).json({ message: 'Evaluation submitted successfully', certificate: certificateResult });
+    } catch (error) {
+        console.error('submitEvaluation: Error:', error.message);
         res.status(500).json({ message: error.message });
     }
 }
@@ -303,10 +305,10 @@ module.exports = {
     archiveEvent,
     getSpecificEvent,
     getTickets,
-    getOrganizations,
     sseEventAttendees,
     getUpcomingEvents,
-    getUserOrganization,
     addCertificate,
     addGeneratedCertificate,
+    getEvaluation,
+    submitEvaluation,
 };
