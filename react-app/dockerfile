@@ -1,18 +1,27 @@
 FROM nginx:latest
 
-
+# Clear default content
 RUN rm -rf /usr/share/nginx/html/*
 
-COPY  /dist /usr/share/nginx/html
+# Copy application files
+COPY /dist /usr/share/nginx/html
 
-
+# Replace default config
 RUN rm -rf /etc/nginx/conf.d/default.conf
 COPY default.conf /etc/nginx/conf.d/default.conf
 
+# Create .well-known directory with proper ownership/permissions
+RUN mkdir -p /usr/share/nginx/html/.well-known && \
+    chown -R nginx:nginx /usr/share/nginx/html/.well-known && \
+    chmod -R 755 /usr/share/nginx/html/.well-known
 
-RUN chmod -R 755 /usr/share/nginx/html
+# Copy Microsoft verification file with explicit permissions
+COPY --chown=nginx:nginx microsoft-identity-association.json /usr/share/nginx/html/.well-known/
 
+# Optional certificates directory setup
 RUN mkdir -p /usr/share/nginx/html/certificates && \
     chown -R nginx:nginx /usr/share/nginx/html/certificates && \
     chmod -R 755 /usr/share/nginx/html/certificates
 
+# Ensure root directory permissions
+RUN chmod -R 755 /usr/share/nginx/html

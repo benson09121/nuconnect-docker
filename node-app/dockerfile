@@ -23,7 +23,7 @@ RUN fc-cache -f -v
 
 
 COPY fonts/fonts.conf /etc/fonts/fonts.conf
-RUN fc-cache -fv && mkdir -p /tmp/fonts-cache && chmod 777 /tmp/fonts-cache
+# RUN fc-cache -fv && mkdir -p /tmp/fonts-cache && chmod 777 /tmp/fonts-cache
 
 RUN mkdir -p /app/certificates/templates /app/certificates/generated && \
     chown -R node:node /app/certificates

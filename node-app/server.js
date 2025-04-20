@@ -37,6 +37,9 @@ app.use('/api/mobile', facebookRoutes);
 app.use('/api/mobile', eventRoutes);
 app.use('/api/mobile', organizationRoutes);
 
+
+
+
 // Global error handler for unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
