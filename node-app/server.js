@@ -6,6 +6,7 @@ const db = require('./config/db');
 const fileUpload = require('express-fileupload');
 const { redisClient } = require('./config/redis');
 // const { scanner } = require('./config/clamav');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
@@ -14,11 +15,16 @@ const server = http.createServer(app);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload({
-    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
-    abortOnLimit: true,     // Required for large files
+    limits: { fileSize: 50 * 1024 * 1024 },
+    abortOnLimit: true, 
     safeFileNames: true,
     preserveExtension: true,
     createParentPath: true,
+}));
+app.use(cors({
+    origin: "http://localhost:5173",
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true,
 }));
 
 
@@ -30,6 +36,11 @@ const eventRoutes = require('./mobile/routes/events');
 const organizationRoutes = require('./mobile/routes/organization');
 
 
+// Import Routes on Web
+const authRoutesWeb = require('./web/routes/auth');
+const permissionRoutesWeb = require('./web/routes/permissions'); 
+const manageAccountsRoutesWeb = require('./web/routes/manageAccounts');
+
 // Routes on Mobile
 app.use('/', indexRoutes);
 app.use('/api/mobile', authRoutes);
@@ -37,8 +48,10 @@ app.use('/api/mobile', facebookRoutes);
 app.use('/api/mobile', eventRoutes);
 app.use('/api/mobile', organizationRoutes);
 
-
-
+// Routes on Web
+app.use('/api/web', authRoutesWeb);
+app.use('/api/web', permissionRoutesWeb);
+app.use('/api/web', manageAccountsRoutesWeb);
 
 // Global error handler for unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {

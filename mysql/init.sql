@@ -21,11 +21,13 @@ CREATE TABLE tbl_user(
     user_id VARCHAR(200) UNIQUE NOT NULL PRIMARY KEY,
     f_name VARCHAR(50) NOT NULL,
     l_name VARCHAR(50) NOT NULL,
-    email VARCHAR(50) UNIQUE NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
     program_id INT NULL,
-    role_id INT NOT NULL DEFAULT 1,
+    role_id INT NOT NULL,
     profile_picture VARCHAR(255),
+    status ENUM('Active', 'Inactive', 'Pending', 'Archive') DEFAULT 'Active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_at TIMESTAMP NULL,
     FOREIGN KEY (role_id) REFERENCES tbl_role(role_id),
     FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
 );
@@ -291,59 +293,55 @@ CREATE TABLE tbl_evaluation_response (
     response_id INT AUTO_INCREMENT PRIMARY KEY,
     evaluation_id INT NOT NULL,
     question_id INT NOT NULL,
-    response_value TEXT NOT NULL, -- Stores JSON/text/numerical values
+    response_value TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (evaluation_id) REFERENCES tbl_evaluation(evaluation_id)
 );
 
-    CREATE TABLE tbl_application_field (
-    field_id INT AUTO_INCREMENT PRIMARY KEY,
-    organization_id INT NOT NULL,
-    field_name VARCHAR(100) NOT NULL,
-    field_type ENUM('text', 'textarea', 'number', 'date', 'file', 'select') NOT NULL,
+    CREATE TABLE tbl_application_requirement (
+    requirement_id INT AUTO_INCREMENT PRIMARY KEY,
+    requirement_name VARCHAR(255) NOT NULL,
+    description TEXT,
     is_required BOOLEAN DEFAULT TRUE,
+    file_path VARCHAR(255) NULL,
+    created_by VARCHAR(200) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES tbl_user(user_id)
 );
 
-CREATE TABLE tbl_application_form (
-    application_id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id VARCHAR(200) NOT NULL,
+CREATE TABLE tbl_organization_requirement_submission (
+    submission_id INT AUTO_INCREMENT PRIMARY KEY,
     organization_id INT NOT NULL,
-    status ENUM('Pending', 'Approved', 'Rejected') DEFAULT 'Pending',
+    requirement_id INT NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    submitted_by VARCHAR(200) NOT NULL,
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE
+    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id),
+    FOREIGN KEY (requirement_id) REFERENCES tbl_application_requirement(requirement_id),
+    FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id)
 );
 
-CREATE TABLE tbl_application_response (
-    response_id INT AUTO_INCREMENT PRIMARY KEY,
-    application_id INT NOT NULL,
-    field_id INT NOT NULL,
-    response TEXT NOT NULL, -- Store the actual response (text, file path, etc.)
-    FOREIGN KEY (application_id) REFERENCES tbl_application_form(application_id) ON DELETE CASCADE,
-    FOREIGN KEY (field_id) REFERENCES tbl_application_field(field_id) ON DELETE CASCADE
-);
 
 -- Notifications Table: Stores the core notification details
 CREATE TABLE tbl_notification (
     notification_id INT AUTO_INCREMENT PRIMARY KEY,
     sender_id VARCHAR(200) DEFAULT NULL,  
     entity_type ENUM('event', 'approval', 'organization', 'transaction', 'general') NOT NULL,
-    entity_id INT DEFAULT NULL,           -- ID of the associated entity (e.g., event_id or approval_id)
-    title VARCHAR(255) NOT NULL,          -- A short title for the notification
-    message TEXT NOT NULL,                -- Detailed message
-    url VARCHAR(255) DEFAULT NULL,        -- Optional URL for a direct link to the related page
+    entity_id INT DEFAULT NULL,      
+    title VARCHAR(255) NOT NULL,          
+    message TEXT NOT NULL,              
+    url VARCHAR(255) DEFAULT NULL,     
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Notification Recipients Table: Each recipient gets an individual row
+
 CREATE TABLE tbl_notification_recipient (
     notification_recipient_id INT AUTO_INCREMENT PRIMARY KEY,
-    notification_id INT NOT NULL,         -- Links to the notification
+    notification_id INT NOT NULL,        
     recipient_type ENUM('user', 'organization', 'program') NOT NULL,
-    recipient_id VARCHAR(200) NOT NULL,     -- For a 'user', this is the user's ID; for 'organization' or 'program', it's the respective ID
-    is_read BOOLEAN DEFAULT FALSE,          -- Tracks if the recipient has read the notification
+    recipient_id VARCHAR(200) NOT NULL,    
+    is_read BOOLEAN DEFAULT FALSE,         
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (notification_id) REFERENCES tbl_notification(notification_id) ON DELETE CASCADE
 );
@@ -434,19 +432,17 @@ DELIMITER ;
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetEmail(
-	IN Email VARCHAR(30)
+    IN p_email VARCHAR(100)
 )
 BEGIN
-
-	SELECT * FROM tbl_user where email = Email;
+    SELECT * FROM tbl_user WHERE email = p_email;
 END $$
 DELIMITER ;
-
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetSpecificEvent(
 IN eventId INT, 
-   userId VARCHAR(30)
+   userId VARCHAR(200)
 )
 BEGIN
 SELECT a.event_id, 
@@ -622,8 +618,8 @@ BEGIN
         o.category AS organization_type,
         (
             SELECT COUNT(*) 
-            FROM tbl_organization_members om 
-            WHERE om.organization_id = o.organization_id
+            FROM tbl_organization_members 
+            WHERE organization_id = o.organization_id
         ) + (
             SELECT COUNT(DISTINCT cm.user_id)
             FROM tbl_committee c
@@ -948,6 +944,309 @@ BEGIN
 END $$
 DELIMITER ;
 
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetUserPermissions(IN p_user_id VARCHAR(200))
+BEGIN
+    SELECT JSON_OBJECT(
+        'f_name', u.f_name,
+        'l_name', u.l_name,
+        'role', r.role_name,
+        'email', u.email,
+        'permissions', COALESCE(
+            (
+                SELECT JSON_ARRAYAGG(permission_name)
+                FROM (
+                    SELECT DISTINCT p.permission_name
+                    FROM (
+                        SELECT p.permission_name
+                        FROM tbl_role_permission rp
+                        JOIN tbl_permission p ON rp.permission_id = p.permission_id
+                        WHERE rp.role_id = u.role_id
+
+                        UNION ALL
+
+                        SELECT p.permission_name
+                        FROM tbl_organization_members om
+                        JOIN tbl_executive_role_permission erp ON om.executive_role_id = erp.executive_role_id
+                        JOIN tbl_permission p ON erp.permission_id = p.permission_id
+                        WHERE om.user_id = u.user_id
+
+                        UNION ALL
+
+                        SELECT p.permission_name
+                        FROM tbl_committee_members cm
+                        JOIN tbl_committee_role_permission crp ON cm.committee_id = crp.committee_role_id
+                        JOIN tbl_permission p ON crp.permission_id = p.permission_id
+                        WHERE cm.user_id = u.user_id
+                    ) AS all_permissions
+                    JOIN tbl_permission p ON all_permissions.permission_name = p.permission_name
+                ) AS distinct_permissions
+            ),
+            JSON_ARRAY()
+        )
+    ) AS user_info
+    FROM tbl_user u
+    JOIN tbl_role r ON u.role_id = r.role_id
+    WHERE u.user_id = p_user_id;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE CreateUser(
+    IN p_user_id VARCHAR(200),
+    IN p_f_name VARCHAR(50),
+    IN p_l_name VARCHAR(50),
+    IN p_email VARCHAR(50)
+)
+BEGIN
+    DECLARE student_role_id INT;
+    
+    SELECT role_id INTO student_role_id 
+    FROM tbl_role 
+    WHERE LOWER(role_name) = 'student';
+    
+    INSERT INTO tbl_user (
+        user_id,
+        f_name,
+        l_name,
+        email,
+        role_id
+    ) VALUES (
+        p_user_id,
+        p_f_name,
+        p_l_name,
+        p_email,
+        student_role_id
+    );
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE HandleLogin(
+    IN p_azure_sub VARCHAR(200),
+    IN p_email VARCHAR(50),
+    IN p_f_name VARCHAR(50),
+    IN p_l_name VARCHAR(50)
+)
+BEGIN
+    DECLARE v_existing_user_id VARCHAR(200);
+    DECLARE v_student_role_id INT;
+    DECLARE v_current_status ENUM('Pending', 'Active', 'Suspended');
+    DECLARE v_current_role_id INT;
+
+    SELECT role_id INTO v_student_role_id 
+    FROM tbl_role 
+    WHERE LOWER(role_name) = 'student';
+
+    SELECT user_id, status, role_id 
+    INTO v_existing_user_id, v_current_status, v_current_role_id
+    FROM tbl_user 
+    WHERE email = p_email;
+
+    IF v_existing_user_id IS NOT NULL THEN
+
+        IF v_current_status = 'Pending' AND v_current_role_id != v_student_role_id THEN
+
+            UPDATE tbl_user 
+            SET user_id = p_azure_sub,
+                f_name = p_f_name,
+                l_name = p_l_name,
+                status = 'Active'
+            WHERE email = p_email;
+        ELSE
+            IF v_existing_user_id != p_azure_sub THEN
+                SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'Account conflict detected';
+            END IF;
+        END IF;
+    ELSE
+
+        INSERT INTO tbl_user (
+            user_id,
+            f_name,
+            l_name,
+            email,
+            role_id,
+            status
+        ) VALUES (
+            p_azure_sub,
+            p_f_name,
+            p_l_name,
+            p_email,
+            v_student_role_id,
+            'Active'
+        );
+    END IF;
+
+    CALL GetUserPermissions(p_azure_sub);
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetManagedAccounts()
+BEGIN
+    DECLARE student_role_id INT;
+    
+    SELECT role_id INTO student_role_id 
+    FROM tbl_role 
+    WHERE LOWER(role_name) = 'student';
+
+    SELECT JSON_OBJECT(
+        'accounts', COALESCE(
+            (SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'user_id', u.user_id,
+                    'name', CONCAT(u.f_name, ' ', u.l_name),
+                    'email', u.email,
+                    'program', p.name,
+                    'role', r.role_name,
+                    'status', u.status,
+                    'created_at', u.created_at
+                )
+             )
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
+            LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             WHERE u.role_id != student_role_id
+               AND u.status IN ('Active', 'Pending')
+            ), 
+            JSON_ARRAY()
+        ),
+        'archive_accounts', COALESCE(
+            (SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'user_id', u.user_id,
+                    'name', CONCAT(u.f_name, ' ', u.l_name),
+                    'program', p.name,
+                    'email', u.email,
+                    'role', r.role_name,
+                    'archived_at', u.created_at  -- Consider adding archived_at column
+                )
+             )
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
+            LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             WHERE u.role_id != student_role_id
+               AND u.status = 'Archive'
+            ),
+            JSON_ARRAY()
+        ),
+        'programs', COALESCE(
+            (SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'program_id', p.program_id,
+                    'program_name', p.name  -- Changed from program_name to name
+                )
+             )
+             FROM tbl_program p),
+            JSON_ARRAY()
+        ),
+        'roles', COALESCE(
+            (SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'role_id', r.role_id,
+                    'role_name', r.role_name
+                )
+             )
+             FROM tbl_role r
+             WHERE r.role_id != student_role_id),
+            JSON_ARRAY()
+        )
+    ) AS result;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE PROCEDURE AddManagedAccount(
+    IN p_email VARCHAR(100),
+    IN p_role_name VARCHAR(100),
+    IN p_program_id INT,
+    IN p_f_name VARCHAR(50),
+    IN p_l_name VARCHAR(50)
+)
+BEGIN
+    DECLARE v_role_id INT;
+    DECLARE v_existing_user INT DEFAULT 0;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    -- Get role ID from role name
+    SELECT role_id INTO v_role_id 
+    FROM tbl_role 
+    WHERE role_name = p_role_name;
+
+    IF v_role_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Invalid role specified';
+    END IF;
+
+    -- Check if user exists
+    SELECT COUNT(*) INTO v_existing_user
+    FROM tbl_user 
+    WHERE email = p_email;
+
+    IF v_existing_user > 0 THEN
+        -- Update existing account
+        UPDATE tbl_user
+        SET role_id = v_role_id,
+            program_id = p_program_id,
+            f_name = p_f_name,
+            l_name = p_l_name
+        WHERE email = p_email;
+    ELSE
+        -- Create new pending account
+        INSERT INTO tbl_user (
+            user_id,
+            f_name,
+            l_name,
+            email,
+            role_id,
+            program_id,
+            status
+        ) VALUES (
+            CONCAT('pending-', UUID()),
+            p_f_name,
+            p_l_name,
+            p_email,
+            v_role_id,
+            p_program_id,
+            'Pending'
+        );
+    END IF;
+
+    COMMIT;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE DeleteManagedAccount(
+    IN p_email VARCHAR(100)
+)
+BEGIN
+    DECLARE user_count INT;
+    
+    SELECT COUNT(*) INTO user_count
+    FROM tbl_user 
+    WHERE email = p_email;
+
+    IF user_count = 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'User not found';
+    ELSE
+
+        UPDATE tbl_user
+        SET 
+            status = 'Archive',
+            archived_at = CURRENT_TIMESTAMP
+        WHERE email = p_email;
+    END IF;
+END $$
+DELIMITER ;
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
 CREATE INDEX idx_event_program ON tbl_event_course(program_id);
@@ -963,15 +1262,56 @@ VALUES("STUDENT"),
 ("SDAO"),
 ("DEAN");
 
+INSERT INTO tbl_permission(permission_name)
+VALUES("CREATE_EVENT"),
+("UPDATE_EVENT"),
+("DELETE_EVENT"),
+("VIEW_EVENT"),
+("REGISTER_EVENT"),
+("CREATE_ORGANIZATION"),
+("UPDATE_ORGANIZATION"),
+("DELETE_ORGANIZATION"),
+("VIEW_ORGANIZATION"),
+("MANAGE_ACCOUNT"),
+("CREATE_COMMITTEE"),
+("UPDATE_COMMITTEE"),
+("DELETE_COMMITTEE"),
+("VIEW_COMMITTEE"),
+("MANAGE_MEMBER"),
+("UPLOAD_REQUIREMENTS"),
+("VIEW_REQUIREMENTS"),
+("VIEW_APPLICATION_FORM"),
+("MANAGE_APPLICATIONS"),
+("CREATE_EVALUATION"),
+("UPDATE_EVALUATION"),
+("DELETE_EVALUATION"),
+("VIEW_EVALUATION"),
+("VIEW_LOGS"),
+("WEB_ACCESS");
+
+INSERT INTO tbl_role_permission (role_id, permission_id) 
+VALUES
+(4,1),
+(4,2),
+(4,3),
+(4,4),
+(4,9),
+(4,10),
+(4,24),
+(4,25);
+
 INSERT INTO tbl_program (name, description) VALUES 
 ("Bachelor of Science in Information Technology", "BSIT"),
 ("Bachelor of Science in Computer Science", "BSCS");
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
 ("900f929ec408cb4d","Benz","Jav","benz@gmail.com", 1, 2), 
-("900f929ec408cb4","Benson","Javier","benson09.javier@outlook.com", 1 , 1),
-("86533891asdvf","Test","test","test@gmail.com", 1, 1),
-("5fb95ed0a0d20daf","Geraldine","Aris","arisgeraldine@outlook.com", 1, 1);
+("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 1),
+("86533891asdvf","Test", "test", "test@gmail.com", 1, 1),
+("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", 1, 1),
+("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
+("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", null, 4),
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", null, 4);
 
 INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, approve_status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
 ("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", 5, "Whole Academic Year", 500, 0, 0),

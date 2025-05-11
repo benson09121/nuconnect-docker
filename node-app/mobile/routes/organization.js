@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const organizationController = require('../controllers/organizationController');
-const authMiddleware = require('../../middlewares/authMiddleware');
+const middleware = require('../../middlewares/middleWare');
 
 
 
-router.get('/organizations', authMiddleware, organizationController.getOrganizations);
-router.get('/profile/organization', authMiddleware, organizationController.getUserOrganization);
+router.get('/organizations', middleware.authMiddleware, organizationController.getOrganizations);
+router.get('/profile/organization', middleware.authMiddleware, organizationController.getUserOrganization);
 
 module.exports = router;

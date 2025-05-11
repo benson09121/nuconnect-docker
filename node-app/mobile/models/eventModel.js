@@ -15,7 +15,7 @@ async function getAllEvents() {
         const [rows] = await connection.query('CALL GetAllEvents(?);', [Auth.get_userId]);
 
         // Cache the events for the user
-        // await redisClient.set(cacheKey, JSON.stringify(rows), 'EX', 3600); // Cache for 1 hour
+        // await redisClient.set(cacheKey, JSON.stringify(rows), 'EX', 3600); // 
         return rows[0];
     } finally {
         connection.release();
