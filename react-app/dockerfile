@@ -23,5 +23,10 @@ RUN mkdir -p /usr/share/nginx/html/certificates && \
     chown -R nginx:nginx /usr/share/nginx/html/certificates && \
     chmod -R 755 /usr/share/nginx/html/certificates
 
+# Requirements directory setup
+RUN mkdir -p /usr/share/nginx/html/requirements && \
+    chown -R nginx:nginx /usr/share/nginx/html/requirements && \
+    chmod -R 755 /usr/share/nginx/html/requirements
+
 # Ensure root directory permissions
 RUN chmod -R 755 /usr/share/nginx/html

@@ -36,6 +36,7 @@ services:
     volumes:
       - /opt/certificates/templates:/app/certificates/templates
       - /opt/certificates/generated:/app/certificates/generated
+      - /opt/requirements:/app/requirements
     networks:
       - my-network
     ports:
@@ -50,6 +51,7 @@ services:
     volumes:
       - /opt/certificates/generated:/usr/share/nginx/html/certificates/generated
       - /opt/certificates/templates:/usr/share/nginx/html/certificates/templates
+      - /opt/requirements:/usr/share/nginx/html/requirements
     ports:
       - "8080:80"
     networks:

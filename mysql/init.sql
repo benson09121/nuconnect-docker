@@ -301,8 +301,8 @@ CREATE TABLE tbl_evaluation_response (
     CREATE TABLE tbl_application_requirement (
     requirement_id INT AUTO_INCREMENT PRIMARY KEY,
     requirement_name VARCHAR(255) NOT NULL,
-    description TEXT,
     is_required BOOLEAN DEFAULT TRUE,
+    is_applicable_to ENUM('apply', 'renew', 'both') DEFAULT 'apply',
     file_path VARCHAR(255) NULL,
     created_by VARCHAR(200) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1157,7 +1157,7 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
-CREATE PROCEDURE AddManagedAccount(
+CREATE DEFINER='admin'@'%' PROCEDURE AddManagedAccount(
     IN p_email VARCHAR(100),
     IN p_role_name VARCHAR(100),
     IN p_program_id INT,
@@ -1248,6 +1248,48 @@ BEGIN
 END $$
 DELIMITER ;
 
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetRequirements()
+BEGIN 
+
+	SELECT * FROM tbl_application_requirement;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE AddRequirement(IN
+	p_requirement_name VARCHAR(255),
+    p_file_path VARCHAR(255),
+    p_created_by VARCHAR(200)
+)
+BEGIN 
+
+	INSERT INTO tbl_application_requirement(requirement_name, file_path, created_by) VALUES(p_requirement_name, p_file_path, p_created_by);
+END $$
+DELIMITER ;
+
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetSpecificRequirement(IN
+	p_requirement_id INT
+)
+BEGIN 
+
+	SELECT * FROM tbl_application_requirement WHERE requirement_id = p_requirement_id;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE DeleteRequirement(
+    IN p_requirement_id INT
+)
+BEGIN
+    DELETE FROM tbl_application_requirement WHERE requirement_id = p_requirement_id;
+END $$
+
+DELIMITER ;
+
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
 CREATE INDEX idx_event_program ON tbl_event_course(program_id);
 
@@ -1278,8 +1320,7 @@ VALUES("CREATE_EVENT"),
 ("DELETE_COMMITTEE"),
 ("VIEW_COMMITTEE"),
 ("MANAGE_MEMBER"),
-("UPLOAD_REQUIREMENTS"),
-("VIEW_REQUIREMENTS"),
+("MANAGE_REQUIREMENTS"),
 ("VIEW_APPLICATION_FORM"),
 ("MANAGE_APPLICATIONS"),
 ("CREATE_EVALUATION"),
@@ -1297,8 +1338,11 @@ VALUES
 (4,4),
 (4,9),
 (4,10),
-(4,24),
-(4,25);
+(4,16),
+(4,23),
+(4,24);
+
+
 
 INSERT INTO tbl_program (name, description) VALUES 
 ("Bachelor of Science in Information Technology", "BSIT"),

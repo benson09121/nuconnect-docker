@@ -28,6 +28,9 @@ COPY fonts/fonts.conf /etc/fonts/fonts.conf
 RUN mkdir -p /app/certificates/templates /app/certificates/generated && \
     chown -R node:node /app/certificates
 
+RUN mkdir -p /app/requirements && \
+    chown -R node:node /app/requirements
+
 WORKDIR /app
 COPY package*.json ./
 
