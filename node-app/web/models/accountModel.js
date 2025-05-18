@@ -3,11 +3,11 @@ const pool = require('../../config/db');
 async function getAccounts() {
     const connection = await pool.getConnection();
     try {
-        const [rows] = await connection.query('CALL GetManagedAccounts()');
+        const [rows] = await connection.query('CALL GetManagedAccounts();');
         return rows[0][0].result;
     }
     catch (error) {
-        console.error('Error    ing permissions:', error);
+        console.error('Error getting permissions:', error);
         throw error;
     }
     finally {

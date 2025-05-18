@@ -104,9 +104,94 @@ async function deleteRequirement(req, res) {
     }
 }
 
+async function updateRequirement(req, res) {
+    const { requirement_name, requirement_id, template_name } = req.body;
+    try {
+        // Get the current requirement to find the old file if needed
+        const [requirement] = await requirementModel.getSpecificRequirement(requirement_id);
+        if (!requirement) {
+            return res.status(404).json({ message: 'Requirement not found' });
+        }
+
+        let newFileName = requirement.file_path;
+
+        if (!req.files || !req.files.template) {
+            // No new file uploaded, just update the name
+            await requirementModel.updateRequirement(requirement_id, requirement_name, newFileName);
+            return res.status(200).json({ message: 'Requirement updated successfully' });
+        } else {
+            // New file uploaded: delete old file, save new file, update DB
+            const uploadedFile = req.files.template;
+
+            // Delete old file
+            if (requirement.file_path) {
+                const oldFilePath = path.join('/app/requirements', requirement.file_path);
+                try {
+                    if (fs.existsSync(oldFilePath)) {
+                        fs.unlinkSync(oldFilePath);
+                    }
+                } catch (fileErr) {
+                    console.error('Error deleting old file:', fileErr);
+                }
+            }
+
+            // Save new file
+            const filename = `requirement-${Date.now()}-${uploadedFile.name}`;
+            const savePath = path.join('/app/requirements', filename);
+            try {
+                fs.writeFileSync(savePath, uploadedFile.data);
+            } catch (writeError) {
+                return res.status(500).json({ message: 'Error saving file', error: writeError.message });
+            }
+
+            newFileName = filename;
+            await requirementModel.updateRequirement(requirement_id, requirement_name, newFileName);
+            return res.status(200).json({ message: 'Requirement and file updated successfully' });
+        }
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while updating the requirement.",
+        });
+    }
+}
+
+ async function addApplicationPeriod(req, res) {
+           const { startDate, endDate, startTime, endTime } = req.body;
+    try {
+ 
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
+
+        await requirementModel.addApplicationPeriod( startDate, endDate, startTime, endTime, req.user.user_id );
+        res.status(201).json({ message: 'Requirement period added successfully' });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while adding the requirement period.",
+        });
+    }
+}
+
+async function getActiveApplicationPeriod(req, res) {
+    try {
+        const activePeriod = await requirementModel.getActiveApplicationPeriod();
+        if (activePeriod.length === 0) {
+            return res.status(404).json({ message: 'No active application period found' });
+        }
+        res.json(activePeriod);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the active application period.",
+        });
+    }
+}
+
 module.exports = {
     addRequirement,
     getRequirements,
     downloadTemplate,
-    deleteRequirement
+    deleteRequirement,
+    updateRequirement,
+    addApplicationPeriod,
+    getActiveApplicationPeriod
 }
