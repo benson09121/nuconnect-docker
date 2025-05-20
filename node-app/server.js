@@ -15,7 +15,7 @@ const server = http.createServer(app);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload({
-    limits: { fileSize: 50 * 1024 * 1024 },
+    limits: {fileSize: 100 * 1024 * 1024},
     abortOnLimit: true, 
     safeFileNames: true,
     preserveExtension: true,

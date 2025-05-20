@@ -72,11 +72,13 @@ const validateAzureJWT = async (req, res, next) => {
   }
 };
 
-const hasPermission = (requiredPermission) => async (req, res, next) => {
+const hasPermission = (requiredPermissions) => async (req, res, next) => {
   try {
       const permissions = await userModel.getPermissions(req.user.user_id);
       const userPermissions = permissions[0]?.user_info?.permissions || [];
-      if (!userPermissions.includes(requiredPermission)) {
+      const required = Array.isArray(requiredPermissions) ? requiredPermissions : [requiredPermissions];
+      const hasAny = required.some(p => userPermissions.includes(p));
+      if (!hasAny) {
           return res.status(403).json({ error: 'Access denied' });
       }
       next();

@@ -1,6 +1,16 @@
 CREATE USER IF NOT EXISTS 'admin'@'%' IDENTIFIED BY 'admin';
 GRANT ALL PRIVILEGES ON db_nuconnect.* TO 'admin'@'%';
+-- GRANT EVENT ON db_nuconnect.* TO 'admin'@'%';
 FLUSH PRIVILEGES;
+
+-- GRANT EVENT ON *.* TO 'root'@'%';
+FLUSH PRIVILEGES;
+
+-- Sets the Timezone to GMT+08 Timezone for the Pilipinas! 
+SET GLOBAL time_zone = '+8:00';
+SET GLOBAL event_scheduler = ON;
+
+ 
 DROP DATABASE IF EXISTS db_nuconnect;
 CREATE DATABASE db_nuconnect;
 USE db_nuconnect;
@@ -48,8 +58,6 @@ CREATE TABLE tbl_role_permission(
     FOREIGN KEY (permission_id) REFERENCES tbl_permission(permission_id) ON DELETE CASCADE
 );
 
--- Organization Table
-
 CREATE TABLE tbl_organization(
     organization_id INT AUTO_INCREMENT PRIMARY KEY,
     adviser_id VARCHAR(200) NOT NULL,
@@ -57,10 +65,9 @@ CREATE TABLE tbl_organization(
     description TEXT,
     base_program_id INT NULL, -- NULL meaning open to all
     logo VARCHAR(255),
-    status ENUM('Pending', 'Approved', 'Rejected') DEFAULT 'Pending',
-    approve_status INT, 
+    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal') DEFAULT 'Pending',
     membership_fee_type ENUM('Per Term', 'Whole Academic Year') NOT NULL,
-    category ENUM('Academic', 'Non-Academic') DEFAULT 'Academic',
+    category ENUM('Co-Curricular Organization', 'Extra Curricular Organization') DEFAULT 'Co-Curricular Organization',
     membership_fee_amount DECIMAL(10,2) NOT NULL,
     is_recruiting BOOLEAN DEFAULT FALSE,
     is_open_to_all_courses BOOLEAN DEFAULT FALSE,
@@ -68,22 +75,32 @@ CREATE TABLE tbl_organization(
     FOREIGN KEY (adviser_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
 );
 
-CREATE TABLE tbl_membership_fees(
-    fee_id INT AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE tbl_renewal_cycle (
     organization_id INT NOT NULL,
-    user_id VARCHAR(200) NOT NULL,
-    amount DECIMAL(10,2) NOT NULL,
-    paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    cycle_number INT NOT NULL,
+    start_date DATE NOT NULL DEFAULT (CURRENT_DATE),
+    president_id VARCHAR(200) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (organization_id, cycle_number),
     FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (president_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+);
+
+CREATE TABLE tbl_organization_course(
+	organization_id INT NOT NULL,
+    program_id INT NOT NULL,
+    PRIMARY KEY (organization_id,program_id),
+    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
+    FOREIGN KEY (program_id) REFERENCES tbl_program(program_id) ON DELETE CASCADE	
 );
 
 CREATE TABLE tbl_executive_role (
     executive_role_id INT AUTO_INCREMENT PRIMARY KEY,
     organization_id INT NOT NULL,
+    cycle_number INT NOT NULL,
     role_title VARCHAR(100) NOT NULL,  -- e.g., 'President', 'Vice-President'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
 );
 
 CREATE TABLE tbl_executive_role_permission (
@@ -98,31 +115,45 @@ CREATE TABLE tbl_executive_role_permission (
 CREATE TABLE tbl_organization_members (
     member_id INT AUTO_INCREMENT PRIMARY KEY,
     organization_id INT NOT NULL,
+    cycle_number INT NOT NULL,
     user_id VARCHAR(200) NOT NULL,
     member_type ENUM('Member', 'Executive', 'Committee') DEFAULT 'Member',
     executive_role_id INT DEFAULT NULL,
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE,
     FOREIGN KEY (executive_role_id) REFERENCES tbl_executive_role (executive_role_id) ON DELETE SET NULL
 );
 
 CREATE TABLE tbl_executive_member_permission (
     executive_permission_id INT AUTO_INCREMENT PRIMARY KEY,
-    member_id INT NOT NULL,  -- references tbl_organization_members
+    member_id INT NOT NULL,
+    organization_id INT NULL,  -- references tbl_organization_members
     permission_id INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (member_id) REFERENCES tbl_organization_members(member_id) ON DELETE CASCADE,
     FOREIGN KEY (permission_id) REFERENCES tbl_permission(permission_id) ON DELETE CASCADE
 );
 
+CREATE TABLE tbl_membership_fees(
+    fee_id INT AUTO_INCREMENT PRIMARY KEY,
+    organization_id INT NOT NULL,
+    cycle_number INT NOT NULL,
+    user_id VARCHAR(200) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+);
+
 CREATE TABLE tbl_committee (
     committee_id INT AUTO_INCREMENT PRIMARY KEY,
     organization_id INT NOT NULL,
+    cycle_number INT NOT NULL,
     name VARCHAR(100) NOT NULL,
     description TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
 );
 
 CREATE TABLE tbl_committee_members(
@@ -152,34 +183,6 @@ CREATE TABLE tbl_committee_role_permission (
     FOREIGN KEY (permission_id) REFERENCES tbl_permission(permission_id) ON DELETE CASCADE
 );
 
-CREATE TABLE tbl_organization_course(
-	organization_id INT NOT NULL,
-    program_id INT NOT NULL,
-    PRIMARY KEY (organization_id,program_id),
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
-    FOREIGN KEY (program_id) REFERENCES tbl_program(program_id) ON DELETE CASCADE	
-);
-
-CREATE TABLE tbl_organization_requirements(
-    requirement_id INT AUTO_INCREMENT PRIMARY KEY,
-    organization_id INT NOT NULL,
-    file_path VARCHAR(255) NOT NULL,
-    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE
-);
-
-CREATE TABLE tbl_approval_process(
-    approval_id INT AUTO_INCREMENT PRIMARY KEY,
-    organization_id INT NOT NULL,
-    approver_id VARCHAR(200) NOT NULL,
-    status ENUM('Pending', 'Approved', 'Rejected') DEFAULT 'Pending',
-    comment TEXT,
-    step INT NOT NULL,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
-    FOREIGN KEY (approver_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
-);
-
 CREATE TABLE tbl_event (
     event_id INT AUTO_INCREMENT PRIMARY KEY,
     organization_id INT NOT NULL,
@@ -199,6 +202,24 @@ CREATE TABLE tbl_event (
     certificate VARCHAR(1000) DEFAULT NULL,
     FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+);
+
+CREATE TABLE tbl_event_course(
+	event_id INT NOT NULL,
+	program_id INT NOT NULL,
+    PRIMARY KEY (event_id, program_id),
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
+    FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
+);
+
+CREATE TABLE tbl_event_attendance(
+		attendance_id INT AUTO_INCREMENT PRIMARY KEY,
+		event_id INT NOT NULL,
+		user_id VARCHAR(200) NOT NULL,
+		status ENUM('Registered', 'Not Registered','Attended') NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
+		FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
 );
 
 CREATE TABLE tbl_certificate_template (
@@ -223,24 +244,6 @@ CREATE TABLE tbl_event_certificate (
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE,
     FOREIGN KEY (template_id) REFERENCES tbl_certificate_template(template_id) ON DELETE CASCADE,
     UNIQUE KEY unique_user_cert (event_id, user_id) -- One cert per user per event
-);
-
-CREATE TABLE tbl_event_course(
-	event_id INT NOT NULL,
-	program_id INT NOT NULL,
-    PRIMARY KEY (event_id, program_id),
-    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
-    FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
-);
-
-	CREATE TABLE tbl_event_attendance(
-		attendance_id INT AUTO_INCREMENT PRIMARY KEY,
-		event_id INT NOT NULL,
-		user_id VARCHAR(200) NOT NULL,
-		status ENUM('Registered', 'Not Registered','Attended') NOT NULL,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
-		FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
 );
 
 CREATE TABLE tbl_project_heads (
@@ -298,11 +301,61 @@ CREATE TABLE tbl_evaluation_response (
     FOREIGN KEY (evaluation_id) REFERENCES tbl_evaluation(evaluation_id)
 );
 
-    CREATE TABLE tbl_application_requirement (
+CREATE TABLE tbl_application_period (
+    period_id INT AUTO_INCREMENT PRIMARY KEY,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_by VARCHAR(200) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES tbl_user(user_id)
+);
+
+CREATE TABLE tbl_approval_process(
+    approval_id INT AUTO_INCREMENT PRIMARY KEY,
+    organization_id INT NOT NULL,
+    period_id INT NULL,
+    approver_id VARCHAR(200) NOT NULL,
+    application_type ENUM('new', 'renewal') NOT NULL DEFAULT 'new',
+    status ENUM('Pending', 'Approved', 'Rejected') DEFAULT 'Pending',
+    comment TEXT,
+    step INT NOT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
+    FOREIGN KEY (period_id) REFERENCES tbl_application_period(period_id) ON DELETE CASCADE,
+    FOREIGN KEY (approver_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+);
+
+CREATE TABLE tbl_application (
+    application_id INT AUTO_INCREMENT PRIMARY KEY,
+    organization_id INT NULL, -- Existing org for renewals
+    cycle_number INT NULL, -- Existing org for renewals
+    application_type ENUM('new', 'renewal') NOT NULL,
+    period_id INT NOT NULL,
+    applicant_user_id VARCHAR(200) NOT NULL,
+    status ENUM('submitted', 'under_review', 'approved', 'rejected') DEFAULT 'under_review',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE SET NULL ,
+    FOREIGN KEY (period_id) REFERENCES tbl_application_period(period_id),
+    FOREIGN KEY (applicant_user_id) REFERENCES tbl_user(user_id)
+);
+
+CREATE TABLE tbl_application_approval (
+    application_id INT NOT NULL,
+    approval_id INT NOT NULL,
+    PRIMARY KEY (application_id, approval_id),
+    FOREIGN KEY (application_id) REFERENCES tbl_application(application_id),
+    FOREIGN KEY (approval_id) REFERENCES tbl_approval_process(approval_id)
+);
+
+CREATE TABLE tbl_application_requirement (
     requirement_id INT AUTO_INCREMENT PRIMARY KEY,
     requirement_name VARCHAR(255) NOT NULL,
-    is_required BOOLEAN DEFAULT TRUE,
-    is_applicable_to ENUM('apply', 'renew', 'both') DEFAULT 'apply',
+    is_applicable_to ENUM('new', 'renew', 'both') DEFAULT 'new',
     file_path VARCHAR(255) NULL,
     created_by VARCHAR(200) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -312,16 +365,18 @@ CREATE TABLE tbl_evaluation_response (
 
 CREATE TABLE tbl_organization_requirement_submission (
     submission_id INT AUTO_INCREMENT PRIMARY KEY,
-    organization_id INT NOT NULL,
+    application_id INT,
     requirement_id INT NOT NULL,
+    cycle_number INT NOT NULL,
+    organization_id INT NOT NULL,
     file_path VARCHAR(255) NOT NULL,
     submitted_by VARCHAR(200) NOT NULL,
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id),
+    FOREIGN KEY (application_id) REFERENCES tbl_application(application_id),
     FOREIGN KEY (requirement_id) REFERENCES tbl_application_requirement(requirement_id),
-    FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id)
+    FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id),
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
 );
-
 
 -- Notifications Table: Stores the core notification details
 CREATE TABLE tbl_notification (
@@ -334,7 +389,6 @@ CREATE TABLE tbl_notification (
     url VARCHAR(255) DEFAULT NULL,     
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
 
 CREATE TABLE tbl_notification_recipient (
     notification_recipient_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -353,7 +407,6 @@ CREATE TABLE tbl_logs(
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
 );
-
 
 -- PROCEDURES
 use db_nuconnect;
@@ -463,7 +516,6 @@ WHERE a.event_id = eventId;
 END $$
 DELIMITER ;
 
-
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetEventAttendees(
 	IN eventId INT
@@ -475,7 +527,6 @@ LEFT JOIN tbl_user b ON a.user_id = b.user_id
 WHERE a.status = "Registered" AND a.event_id = eventId;
 END $$
 DELIMITER ;
-
 
 DELIMITER $$
 
@@ -952,12 +1003,15 @@ BEGIN
         'l_name', u.l_name,
         'role', r.role_name,
         'email', u.email,
+        'program_id', p.program_id,
+        'program_name', p.name,
         'permissions', COALESCE(
             (
                 SELECT JSON_ARRAYAGG(permission_name)
                 FROM (
-                    SELECT DISTINCT p.permission_name
+                    SELECT DISTINCT permission_name
                     FROM (
+                        -- Base role permissions
                         SELECT p.permission_name
                         FROM tbl_role_permission rp
                         JOIN tbl_permission p ON rp.permission_id = p.permission_id
@@ -965,31 +1019,61 @@ BEGIN
 
                         UNION ALL
 
+                        -- Executive role permissions
                         SELECT p.permission_name
                         FROM tbl_organization_members om
-                        JOIN tbl_executive_role_permission erp ON om.executive_role_id = erp.executive_role_id
+                        JOIN tbl_executive_role er ON om.executive_role_id = er.executive_role_id
+                        JOIN tbl_executive_role_permission erp ON er.executive_role_id = erp.executive_role_id
                         JOIN tbl_permission p ON erp.permission_id = p.permission_id
                         WHERE om.user_id = u.user_id
 
                         UNION ALL
 
+                        -- Committee role permissions
                         SELECT p.permission_name
                         FROM tbl_committee_members cm
-                        JOIN tbl_committee_role_permission crp ON cm.committee_id = crp.committee_role_id
+                        JOIN tbl_committee c ON cm.committee_id = c.committee_id
+                        JOIN tbl_committee_role cr ON c.committee_id = cr.committee_id
+                        JOIN tbl_committee_role_permission crp ON cr.committee_role_id = crp.committee_role_id
                         JOIN tbl_permission p ON crp.permission_id = p.permission_id
                         WHERE cm.user_id = u.user_id
                     ) AS all_permissions
-                    JOIN tbl_permission p ON all_permissions.permission_name = p.permission_name
                 ) AS distinct_permissions
+            ),
+            JSON_ARRAY()
+        ),
+        'organizations', COALESCE(
+            (
+                SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                    'name', orgs.name,
+                    'logo', orgs.logo
+                ))
+                FROM (
+                    SELECT o.name, o.logo
+                    FROM tbl_organization o
+                    WHERE o.adviser_id = u.user_id
+
+                    UNION
+
+                    SELECT o.name, o.logo
+                    FROM tbl_organization_members om
+                    JOIN tbl_renewal_cycle rc ON om.organization_id = rc.organization_id 
+                        AND om.cycle_number = rc.cycle_number
+                    JOIN tbl_organization o ON om.organization_id = o.organization_id
+                    WHERE om.user_id = u.user_id
+                ) AS orgs
+                GROUP BY orgs.name, orgs.logo
             ),
             JSON_ARRAY()
         )
     ) AS user_info
     FROM tbl_user u
     JOIN tbl_role r ON u.role_id = r.role_id
+    LEFT JOIN tbl_program p ON u.program_id = p.program_id
     WHERE u.user_id = p_user_id;
 END $$
 DELIMITER ;
+
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE CreateUser(
@@ -1268,7 +1352,6 @@ BEGIN
 END $$
 DELIMITER ;
 
-
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetSpecificRequirement(IN
 	p_requirement_id INT
@@ -1290,13 +1373,99 @@ END $$
 
 DELIMITER ;
 
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE UpdateRequirement(IN
+	p_requirement_id INT,
+    p_requirement_name VARCHAR(255),
+    p_file_path VARCHAR(255)
+)
+BEGIN
+	UPDATE tbl_application_requirement SET requirement_name = p_requirement_name, file_path = p_file_path;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE AddApplicationPeriod(IN
+	p_start_date DATE,
+    p_end_date DATE,
+    p_start_time TIME,
+    p_end_time TIME,
+    p_created_by VARCHAR(200)
+)
+BEGIN
+	INSERT INTO tbl_application_period
+    (
+    start_date, 
+    end_date, 
+    start_time, 
+    end_time,
+    created_by)
+    VALUES
+    (p_start_date, 
+    p_end_date, 
+    p_start_time, 
+    p_end_time,
+    p_created_by
+    );
+END $$
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetActiveApplicationPeriod()
+BEGIN
+  DECLARE currentDate DATE;
+  DECLARE currentTime TIME;
+  
+  SET currentDate = CURDATE();
+  SET currentTime = CURTIME();
+
+  SELECT *
+  FROM tbl_application_period
+  WHERE is_active = 1
+    AND currentDate BETWEEN start_date AND end_date
+    AND (
+      (currentDate > start_date AND currentDate < end_date) OR
+      (currentDate = start_date AND currentTime >= start_time) OR
+      (currentDate = end_date AND currentTime <= end_time)
+    )
+  ORDER BY created_at DESC
+  LIMIT 1;
+END $$
+
+DELIMITER ;
+
+-- INDEXES
+
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
 CREATE INDEX idx_event_program ON tbl_event_course(program_id);
 
 CREATE INDEX idx_org_members ON tbl_organization_members(organization_id, user_id);
 CREATE INDEX idx_committee_org ON tbl_committee(organization_id);
 CREATE INDEX idx_committee_members_user ON tbl_committee_members(user_id);
-    
+
+CREATE INDEX idx_active_end_datetime 
+ON tbl_application_period(is_active, end_date, end_time);
+
+-- EVENTS
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' EVENT ev_disable_expired_periods
+ON SCHEDULE EVERY 1 HOUR
+DO
+BEGIN
+  UPDATE tbl_application_period
+  SET is_active = 0
+  WHERE is_active = 1
+    AND (
+      end_date < CURDATE()
+      OR (end_date = CURDATE() AND end_time < CURTIME())
+    );
+END $$
+
+DELIMITER ;
+
+-- SAMPLE DATAS
 INSERT INTO tbl_role(role_name)
 VALUES("STUDENT"), 
 ("ADVISER"),
@@ -1310,16 +1479,15 @@ VALUES("CREATE_EVENT"),
 ("DELETE_EVENT"),
 ("VIEW_EVENT"),
 ("REGISTER_EVENT"),
-("CREATE_ORGANIZATION"),
-("UPDATE_ORGANIZATION"),
-("DELETE_ORGANIZATION"),
+("APPLY_ORGANIZATION"),
+("APPROVE_ORGANIZATION"),
+("ARCHIVE_ORGANIZATION"),
 ("VIEW_ORGANIZATION"),
 ("MANAGE_ACCOUNT"),
 ("CREATE_COMMITTEE"),
 ("UPDATE_COMMITTEE"),
 ("DELETE_COMMITTEE"),
 ("VIEW_COMMITTEE"),
-("MANAGE_MEMBER"),
 ("MANAGE_REQUIREMENTS"),
 ("VIEW_APPLICATION_FORM"),
 ("MANAGE_APPLICATIONS"),
@@ -1338,9 +1506,12 @@ VALUES
 (4,4),
 (4,9),
 (4,10),
-(4,16),
+(4,15),
+(4,22),
 (4,23),
-(4,24);
+(2,6),
+(2,9),
+(2,23);
 
 
 
@@ -1355,19 +1526,20 @@ INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUE
 ("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", 1, 1),
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", null, 4),
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", null, 4);
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
+("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
 
-INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, approve_status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
-("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", 5, "Whole Academic Year", 500, 0, 0),
-("900f929ec408cb4d", "Isite","This is Isite", 2, "Approved", 5, "Whole Academic Year", 500,0,0);
+-- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+-- ("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+-- ("900f929ec408cb4d", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
-INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
-(2,"President");
+-- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
+-- (2,"President");
 
-INSERT INTO tbl_organization_members(organization_id,user_id, member_type, executive_role_id)
-VALUES (1, "900f929ec408cb4", "Member",null),
-(2, "86533891asdvf", "Executive",null),
-(2, "5fb95ed0a0d20daf","Member",1);
+-- INSERT INTO tbl_organization_members(organization_id,user_id, member_type, executive_role_id)
+-- VALUES (1, "900f929ec408cb4", "Member",null),
+-- (2, "86533891asdvf", "Executive",null),
+-- (2, "5fb95ed0a0d20daf","Member",1);
 
 INSERT INTO tbl_evaluation_question_group (group_title, group_description, is_active)
 VALUES 
@@ -1405,3 +1577,25 @@ VALUES
 ('What did you like most about the activity?', 'textbox', 6, TRUE),
 ('What did you like least about the activity?', 'textbox', 6, TRUE),
 ('Any other comments/suggestions for further improvement the activity?', 'textbox', 6, TRUE);
+
+-- REQUIREMENTS
+
+
+INSERT INTO tbl_application_requirement(
+requirement_name, 
+is_applicable_to, 
+file_path, 
+created_by, 
+created_at, 
+updated_at
+) 
+VALUES
+('Letter of Intent', 'new', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
+('Student Org Application Form', 'new', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
+('By Laws of the Organization', 'new', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
+('List of Officers/Founders', 'new', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
+('Letter from the College Dean', 'new', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
+('List of Members', 'new', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
+('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
+('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
+('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');

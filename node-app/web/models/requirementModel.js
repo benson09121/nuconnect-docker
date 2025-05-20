@@ -60,10 +60,57 @@ async function deleteRequirement(requirement_id){
     }
 }
 
+async function updateRequirement(requirement_id, requirement_name, file_path) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL UpdateRequirement(?, ?, ?);', [requirement_id, requirement_name, file_path]);
+        return rows[0];
+    }   
+    catch (error) {
+        console.error('Error updating requirement:', error);
+        throw error;
+    }
+    finally {
+        connection.release();
+    }
+}
+
+async function addApplicationPeriod(startDate, endDate, startTime, endTime, user_id){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL AddApplicationPeriod(?, ?, ?, ?, ?);', [startDate, endDate, startTime, endTime, user_id]);
+        return rows[0];
+    }
+    catch (error) {
+        console.error('Error adding requirement period:', error);
+        throw error;
+    }
+    finally {
+        connection.release();
+    }
+}
+
+async function getActiveApplicationPeriod(){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetActiveApplicationPeriod();');
+        return rows[0];
+    }
+    catch (error) {
+        console.error('Error fetching active application period:', error);
+        throw error;
+    }
+    finally {
+        connection.release();
+    }
+}
 
 module.exports = {
     addRequirement,
     getRequirements,
     getSpecificRequirement,
-    deleteRequirement
+    deleteRequirement,
+    updateRequirement,
+    addApplicationPeriod,
+    getActiveApplicationPeriod
 };

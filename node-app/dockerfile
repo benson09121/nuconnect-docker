@@ -2,16 +2,16 @@ FROM node:lts
 # FROM arm64v8/debian:bullseye-slim
 
 
-RUN apt-get update && apt-get install -y \
-    libreoffice \
-    fonts-croscore \
-    fonts-liberation \
-    fonts-dejavu \
-    fontconfig \
-    fonts-freefont-ttf \
-    fonts-noto \
-    fonts-roboto \
-    && rm -rf /var/lib/apt/lists/*
+ RUN apt-get update && apt-get install -y \
+     libreoffice
+#     fonts-croscore \
+#     fonts-liberation \
+#     fonts-dejavu \
+#     fontconfig \
+#     fonts-freefont-ttf \
+#     fonts-noto \
+#     fonts-roboto \
+#     && rm -rf /var/lib/apt/lists/*
 
 
 RUN apt-get install -y fontconfig
@@ -30,6 +30,10 @@ RUN mkdir -p /app/certificates/templates /app/certificates/generated && \
 
 RUN mkdir -p /app/requirements && \
     chown -R node:node /app/requirements
+
+RUN mkdir -p /app/organizations && \ 
+    mkdir -p /app/organizations/requirements && \
+    chown -R node:node /app/organizations
 
 WORKDIR /app
 COPY package*.json ./
