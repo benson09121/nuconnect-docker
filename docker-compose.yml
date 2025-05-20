@@ -11,7 +11,7 @@ services:
       - --init-file=/docker-entrypoint-initdb.d/init.sql
     volumes:
       - mysql_volume:/var/lib/mysql
-      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql 
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "3307:3306"
     networks:
@@ -37,6 +37,7 @@ services:
       - /opt/certificates/templates:/app/certificates/templates
       - /opt/certificates/generated:/app/certificates/generated
       - /opt/requirements:/app/requirements
+      - /opt/organizations:/app/organizations
     networks:
       - my-network
     ports:
@@ -52,6 +53,7 @@ services:
       - /opt/certificates/generated:/usr/share/nginx/html/certificates/generated
       - /opt/certificates/templates:/usr/share/nginx/html/certificates/templates
       - /opt/requirements:/usr/share/nginx/html/requirements
+      - /opt/organizations:/usr/share/nginx/html/organizations
     ports:
       - "8080:80"
     networks:

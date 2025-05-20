@@ -1,5 +1,9 @@
 CREATE USER IF NOT EXISTS 'admin'@'%' IDENTIFIED BY 'admin';
 GRANT ALL PRIVILEGES ON db_nuconnect.* TO 'admin'@'%';
+-- GRANT EVENT ON db_nuconnect.* TO 'admin'@'%';
+FLUSH PRIVILEGES;
+
+-- GRANT EVENT ON *.* TO 'root'@'%';
 FLUSH PRIVILEGES;
 
 -- Sets the Timezone to GMT+08 Timezone for the Pilipinas! 
@@ -63,7 +67,7 @@ CREATE TABLE tbl_organization(
     logo VARCHAR(255),
     status ENUM('Pending', 'Approved', 'Rejected', 'Renewal') DEFAULT 'Pending',
     membership_fee_type ENUM('Per Term', 'Whole Academic Year') NOT NULL,
-    category ENUM('Academic', 'Non-Academic') DEFAULT 'Academic',
+    category ENUM('Co-Curricular Organization', 'Extra Curricular Organization') DEFAULT 'Co-Curricular Organization',
     membership_fee_amount DECIMAL(10,2) NOT NULL,
     is_recruiting BOOLEAN DEFAULT FALSE,
     is_open_to_all_courses BOOLEAN DEFAULT FALSE,
@@ -999,12 +1003,15 @@ BEGIN
         'l_name', u.l_name,
         'role', r.role_name,
         'email', u.email,
+        'program_id', p.program_id,
+        'program_name', p.name,
         'permissions', COALESCE(
             (
                 SELECT JSON_ARRAYAGG(permission_name)
                 FROM (
-                    SELECT DISTINCT p.permission_name
+                    SELECT DISTINCT permission_name
                     FROM (
+                        -- Base role permissions
                         SELECT p.permission_name
                         FROM tbl_role_permission rp
                         JOIN tbl_permission p ON rp.permission_id = p.permission_id
@@ -1012,31 +1019,61 @@ BEGIN
 
                         UNION ALL
 
+                        -- Executive role permissions
                         SELECT p.permission_name
                         FROM tbl_organization_members om
-                        JOIN tbl_executive_role_permission erp ON om.executive_role_id = erp.executive_role_id
+                        JOIN tbl_executive_role er ON om.executive_role_id = er.executive_role_id
+                        JOIN tbl_executive_role_permission erp ON er.executive_role_id = erp.executive_role_id
                         JOIN tbl_permission p ON erp.permission_id = p.permission_id
                         WHERE om.user_id = u.user_id
 
                         UNION ALL
 
+                        -- Committee role permissions
                         SELECT p.permission_name
                         FROM tbl_committee_members cm
-                        JOIN tbl_committee_role_permission crp ON cm.committee_id = crp.committee_role_id
+                        JOIN tbl_committee c ON cm.committee_id = c.committee_id
+                        JOIN tbl_committee_role cr ON c.committee_id = cr.committee_id
+                        JOIN tbl_committee_role_permission crp ON cr.committee_role_id = crp.committee_role_id
                         JOIN tbl_permission p ON crp.permission_id = p.permission_id
                         WHERE cm.user_id = u.user_id
                     ) AS all_permissions
-                    JOIN tbl_permission p ON all_permissions.permission_name = p.permission_name
                 ) AS distinct_permissions
+            ),
+            JSON_ARRAY()
+        ),
+        'organizations', COALESCE(
+            (
+                SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                    'name', orgs.name,
+                    'logo', orgs.logo
+                ))
+                FROM (
+                    SELECT o.name, o.logo
+                    FROM tbl_organization o
+                    WHERE o.adviser_id = u.user_id
+
+                    UNION
+
+                    SELECT o.name, o.logo
+                    FROM tbl_organization_members om
+                    JOIN tbl_renewal_cycle rc ON om.organization_id = rc.organization_id 
+                        AND om.cycle_number = rc.cycle_number
+                    JOIN tbl_organization o ON om.organization_id = o.organization_id
+                    WHERE om.user_id = u.user_id
+                ) AS orgs
+                GROUP BY orgs.name, orgs.logo
             ),
             JSON_ARRAY()
         )
     ) AS user_info
     FROM tbl_user u
     JOIN tbl_role r ON u.role_id = r.role_id
+    LEFT JOIN tbl_program p ON u.program_id = p.program_id
     WHERE u.user_id = p_user_id;
 END $$
 DELIMITER ;
+
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE CreateUser(
@@ -1130,19 +1167,17 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
-
 CREATE DEFINER='admin'@'%' PROCEDURE GetManagedAccounts()
 BEGIN
     DECLARE student_role_id INT;
-
-    -- Get the role_id of 'student'
+    
     SELECT role_id INTO student_role_id 
     FROM tbl_role 
     WHERE LOWER(role_name) = 'student';
 
     SELECT JSON_OBJECT(
-        'accounts', COALESCE((
-            SELECT JSON_ARRAYAGG(
+        'accounts', COALESCE(
+            (SELECT JSON_ARRAYAGG(
                 JSON_OBJECT(
                     'user_id', u.user_id,
                     'name', CONCAT(u.f_name, ' ', u.l_name),
@@ -1150,88 +1185,60 @@ BEGIN
                     'program', p.name,
                     'role', r.role_name,
                     'status', u.status,
-                    'created_at', u.created_at,
-                    'organizations', COALESCE((
-    SELECT JSON_ARRAYAGG(
-        JSON_OBJECT(
-            'name', o.name,
-            'logo', o.logo,
-            'role', CASE
-                WHEN o.created_by = u.user_id THEN 'Adviser'
-                ELSE oe.rank
-            END
-        )
-    )
-    FROM tbl_organization o
-    LEFT JOIN tbl_organization_executive oe 
-        ON o.organization_id = oe.organization_id AND oe.user_id = u.user_id
-    WHERE o.created_by = u.user_id OR oe.user_id = u.user_id
-), JSON_ARRAY())
+                    'created_at', u.created_at
                 )
-            )
-            FROM tbl_user u
-            JOIN tbl_role r ON u.role_id = r.role_id
+             )
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
             LEFT JOIN tbl_program p ON u.program_id = p.program_id
-            WHERE u.role_id != student_role_id
-              AND u.status IN ('Active', 'Pending')
-        ), JSON_ARRAY()),
-
-        'archive_accounts', COALESCE((
-            SELECT JSON_ARRAYAGG(
+             WHERE u.role_id != student_role_id
+               AND u.status IN ('Active', 'Pending')
+            ), 
+            JSON_ARRAY()
+        ),
+        'archive_accounts', COALESCE(
+            (SELECT JSON_ARRAYAGG(
                 JSON_OBJECT(
                     'user_id', u.user_id,
                     'name', CONCAT(u.f_name, ' ', u.l_name),
-                    'email', u.email,
                     'program', p.name,
+                    'email', u.email,
                     'role', r.role_name,
-                    'archived_at', u.created_at,
-                    'organizations', COALESCE((
-                        SELECT JSON_ARRAYAGG(
-                            JSON_OBJECT(
-                                'name', o.name,
-                                'logo', o.logo
-                            )
-                        )
-                        FROM tbl_organization o
-                        LEFT JOIN tbl_organization_executive oe ON o.organization_id = oe.organization_id
-                        WHERE o.created_by = u.user_id OR oe.user_id = u.user_id
-                    ), JSON_ARRAY())
+                    'archived_at', u.created_at  -- Consider adding archived_at column
                 )
-            )
-            FROM tbl_user u
-            JOIN tbl_role r ON u.role_id = r.role_id
+             )
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
             LEFT JOIN tbl_program p ON u.program_id = p.program_id
-            WHERE u.role_id != student_role_id
-              AND u.status = 'Archive'
-        ), JSON_ARRAY()),
-
-        'programs', COALESCE((
-            SELECT JSON_ARRAYAGG(
+             WHERE u.role_id != student_role_id
+               AND u.status = 'Archive'
+            ),
+            JSON_ARRAY()
+        ),
+        'programs', COALESCE(
+            (SELECT JSON_ARRAYAGG(
                 JSON_OBJECT(
                     'program_id', p.program_id,
-                    'program_name', p.name
+                    'program_name', p.name  -- Changed from program_name to name
                 )
-            )
-            FROM tbl_program p
-        ), JSON_ARRAY()),
-
-        'roles', COALESCE((
-            SELECT JSON_ARRAYAGG(
+             )
+             FROM tbl_program p),
+            JSON_ARRAY()
+        ),
+        'roles', COALESCE(
+            (SELECT JSON_ARRAYAGG(
                 JSON_OBJECT(
                     'role_id', r.role_id,
                     'role_name', r.role_name
                 )
-            )
-            FROM tbl_role r
-            WHERE r.role_id != student_role_id
-        ), JSON_ARRAY())
-
+             )
+             FROM tbl_role r
+             WHERE r.role_id != student_role_id),
+            JSON_ARRAY()
+        )
     ) AS result;
-
 END $$
-
 DELIMITER ;
-
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE AddManagedAccount(
@@ -1428,6 +1435,8 @@ END $$
 
 DELIMITER ;
 
+-- INDEXES
+
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
 CREATE INDEX idx_event_program ON tbl_event_course(program_id);
 
@@ -1435,11 +1444,13 @@ CREATE INDEX idx_org_members ON tbl_organization_members(organization_id, user_i
 CREATE INDEX idx_committee_org ON tbl_committee(organization_id);
 CREATE INDEX idx_committee_members_user ON tbl_committee_members(user_id);
 
+CREATE INDEX idx_active_end_datetime 
+ON tbl_application_period(is_active, end_date, end_time);
 
 -- EVENTS
 
 DELIMITER $$
-CREATE EVENT ev_disable_expired_periods
+CREATE DEFINER='admin'@'%' EVENT ev_disable_expired_periods
 ON SCHEDULE EVERY 1 HOUR
 DO
 BEGIN
@@ -1515,7 +1526,8 @@ INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUE
 ("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", 1, 1),
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", null, 4),
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", null, 4);
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
+("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
 
 -- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
 -- ("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
@@ -1565,3 +1577,25 @@ VALUES
 ('What did you like most about the activity?', 'textbox', 6, TRUE),
 ('What did you like least about the activity?', 'textbox', 6, TRUE),
 ('Any other comments/suggestions for further improvement the activity?', 'textbox', 6, TRUE);
+
+-- REQUIREMENTS
+
+
+INSERT INTO tbl_application_requirement(
+requirement_name, 
+is_applicable_to, 
+file_path, 
+created_by, 
+created_at, 
+updated_at
+) 
+VALUES
+('Letter of Intent', 'new', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
+('Student Org Application Form', 'new', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
+('By Laws of the Organization', 'new', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
+('List of Officers/Founders', 'new', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
+('Letter from the College Dean', 'new', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
+('List of Members', 'new', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
+('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
+('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
+('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
