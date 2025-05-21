@@ -1,10 +1,10 @@
 const pool = require('../../config/db');
 
 
-async function createOrganizationApplication(organizations, executives,user_id){
+async function createOrganizationApplication(organizations, executives, requirements,user_id){
     const connection = await pool.getConnection();
     try {
-        const [rows] = await connection.query('CALL CreateOrganizationApplication(?,?,?);', [organizations, executives,user_id]);
+        const [rows] = await connection.query('CALL CreateOrganizationApplication(?,?,?,?);', [JSON.stringify(organizations),JSON.stringify(executives), JSON.stringify(requirements),user_id]);
         return rows[0];
     }
     catch (error) {
@@ -18,5 +18,5 @@ async function createOrganizationApplication(organizations, executives,user_id){
 
 
 module.exports = {
-  createOrganization
+  createOrganizationApplication,
 };

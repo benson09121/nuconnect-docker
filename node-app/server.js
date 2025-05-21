@@ -40,7 +40,8 @@ const organizationRoutes = require('./mobile/routes/organization');
 const authRoutesWeb = require('./web/routes/auth');
 const permissionRoutesWeb = require('./web/routes/permissions'); 
 const manageAccountsRoutesWeb = require('./web/routes/manageAccounts');
-const RequirementsWb = require('./web/routes/requirements');
+const RequirementsRoutesWeb = require('./web/routes/requirements');
+const organizationsRoutesWeb = require('./web/routes/organizations');
 
 // Routes on Mobile
 app.use('/', indexRoutes);
@@ -53,8 +54,8 @@ app.use('/api/mobile', organizationRoutes);
 app.use('/api/web', authRoutesWeb);
 app.use('/api/web', permissionRoutesWeb);
 app.use('/api/web', manageAccountsRoutesWeb);
-app.use('/api/web', RequirementsWb);
-
+app.use('/api/web', RequirementsRoutesWeb);
+app.use('/api/web', organizationsRoutesWeb);
 
 // Global error handler for unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
