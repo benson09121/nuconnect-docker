@@ -1446,6 +1446,251 @@ END $$
 
 DELIMITER ;
 
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE CreateOrganizationApplication(
+    IN p_organization JSON,
+    IN p_executives JSON,
+    IN p_requirements JSON,
+    IN p_user_id VARCHAR(200)
+    )
+BEGIN
+    DECLARE v_organization_id INT;
+    DECLARE v_program_id INT;
+    DECLARE v_period_id INT;
+    DECLARE v_application_id INT;
+    DECLARE v_president_id VARCHAR(200);
+    DECLARE v_org_name VARCHAR(100);
+    DECLARE v_logo_filename VARCHAR(255);
+    DECLARE v_sanitized_name VARCHAR(100);
+    DECLARE i INT DEFAULT 0;
+    DECLARE v_executive_count INT;
+    
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    -- Get user's program
+    SELECT program_id INTO v_program_id 
+    FROM tbl_user 
+    WHERE user_id = p_user_id;
+
+    IF v_program_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'User program not found';
+    END IF;
+
+    -- Create organization
+    INSERT INTO tbl_organization (
+        adviser_id,
+        name,
+        description,
+        logo,
+        base_program_id,
+        status,
+        membership_fee_type,
+        membership_fee_amount,
+        is_recruiting,
+        is_open_to_all_courses,
+        category
+    ) VALUES (
+        p_user_id,
+        JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_name')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_description')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_logo')),
+        v_program_id,
+        'Pending',
+        JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.fee_duration')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.fee_amount')),
+        FALSE,
+        FALSE,
+        'Co-Curricular Organization'
+    );
+
+    SET v_organization_id = LAST_INSERT_ID();
+    SET v_org_name = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_name'));
+    SET v_logo_filename = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_logo'));
+    SET v_sanitized_name = REPLACE(LOWER(v_org_name), ' ', '-');
+
+    -- Process executives
+    SET v_executive_count = JSON_LENGTH(p_executives);
+    WHILE i < v_executive_count DO
+        BEGIN
+            DECLARE v_fname VARCHAR(50);
+            DECLARE v_lname VARCHAR(50);
+            DECLARE v_role VARCHAR(100);
+            DECLARE v_email VARCHAR(100);
+            DECLARE v_exec_user_id VARCHAR(200);
+            
+            SET v_fname = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].f_name')));
+            SET v_lname = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].l_name')));
+            SET v_role = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].role_name')));
+            SET v_email = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].nu_email')));
+            
+            -- Check/create user
+            INSERT IGNORE INTO tbl_user (
+                user_id,
+                f_name,
+                l_name,
+                email,
+                program_id,
+                role_id,
+                status
+            ) VALUES (
+                v_email,
+                v_fname,
+                v_lname,
+                v_email,
+                v_program_id,
+                1,  -- Assuming role_id 1 = Student
+                'Pending'
+            );
+
+            IF UPPER(v_role) = 'PRESIDENT' THEN
+                SET v_president_id = v_email;
+            END IF;
+
+            SET i = i + 1;
+        END;
+    END WHILE;
+
+    -- Validate president exists
+    IF v_president_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Organization must have a President';
+    END IF;
+
+    -- Create renewal cycle
+    INSERT INTO tbl_renewal_cycle (
+        organization_id,
+        cycle_number,
+        president_id
+    ) VALUES (
+        v_organization_id,
+        1,
+        v_president_id
+    );
+
+    -- Get active application period
+    SELECT period_id INTO v_period_id 
+    FROM tbl_application_period 
+    WHERE is_active = TRUE 
+    ORDER BY created_at DESC 
+    LIMIT 1;
+
+    IF v_period_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'No active application period';
+    END IF;
+
+    -- Create application
+    INSERT INTO tbl_application (
+        organization_id,
+        cycle_number,
+        application_type,
+        period_id,
+        applicant_user_id,
+        status
+    ) VALUES (
+        v_organization_id,
+        1,
+        'new',
+        v_period_id,
+        p_user_id,
+        'submitted'
+    );
+
+    SET v_application_id = LAST_INSERT_ID();
+
+    -- Create executive roles and memberships
+    SET i = 0;
+    WHILE i < v_executive_count DO
+        BEGIN
+            DECLARE v_role_title VARCHAR(100);
+            DECLARE v_email VARCHAR(100);
+            DECLARE v_exec_role_id INT;
+            
+            SET v_role_title = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].role_name')));
+            SET v_email = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].nu_email')));
+            
+            -- Create executive role
+            INSERT INTO tbl_executive_role (
+                organization_id,
+                cycle_number,
+                role_title
+            ) VALUES (
+                v_organization_id,
+                1,
+                v_role_title
+            );
+            
+            SET v_exec_role_id = LAST_INSERT_ID();
+            
+            -- Link member to role
+            INSERT INTO tbl_organization_members (
+                organization_id,
+                cycle_number,
+                user_id,
+                member_type,
+                executive_role_id
+            ) VALUES (
+                v_organization_id,
+                1,
+                v_email,
+                'Executive',
+                v_exec_role_id
+            );
+
+            SET i = i + 1;
+        END;
+    END WHILE;
+
+    -- Handle requirements
+    SET i = 0;
+    SET v_executive_count = JSON_LENGTH(p_requirements);
+    WHILE i < v_executive_count DO
+        BEGIN
+            DECLARE v_req_id INT;
+            DECLARE v_file_path VARCHAR(255);
+            
+            SET v_req_id = JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_id'));
+            SET v_file_path = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_path')));
+            
+            INSERT INTO tbl_organization_requirement_submission (
+                application_id,
+                requirement_id,
+                cycle_number,
+                organization_id,
+                file_path,
+                submitted_by
+            ) VALUES (
+                v_application_id,
+                v_req_id,
+                1,
+                v_organization_id,
+                v_file_path,
+                p_user_id
+            );
+
+            SET i = i + 1;
+        END;
+    END WHILE;
+
+    COMMIT;
+
+    -- Return generated paths and IDs for file handling
+    SELECT 
+        v_organization_id AS organization_id,
+        v_application_id AS application_id,
+        v_sanitized_name AS directory_name,
+        v_logo_filename AS logo_filename,
+        JSON_ARRAYAGG(JSON_OBJECT(
+            'requirement_id', requirement_id,
+            'filename', requirement_path
+        )) AS requirement_files;
+END$$
+
+DELIMITER ;
 
 
 -- INDEXES

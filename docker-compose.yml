@@ -45,6 +45,15 @@ services:
     restart: unless-stopped
     depends_on:
       - mysql
+    develop:
+      watch:
+        - action: sync
+          path: ./node-app
+          target: /app
+          ignore:
+            - node_modules/
+        - action: rebuild
+          path: package.json     
 
   nginx:
     container_name: nginx
