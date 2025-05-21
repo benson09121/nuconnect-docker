@@ -1435,6 +1435,19 @@ END $$
 
 DELIMITER ;
 
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE UpdateApplicationPeriod()
+BEGIN
+  UPDATE tbl_application_period
+  SET is_active = 0
+  WHERE is_active = 1;
+END $$
+
+DELIMITER ;
+
+
+
 -- INDEXES
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);

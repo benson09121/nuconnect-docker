@@ -186,6 +186,17 @@ async function getActiveApplicationPeriod(req, res) {
     }
 }
 
+async function updateApplicationPeriod(req, res) {
+    try {
+        await requirementModel.updateApplicationPeriod();
+        res.status(200).json({ message: 'Requirement period updated successfully' });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while updating the requirement period.",
+        });
+    }
+}
+
 module.exports = {
     addRequirement,
     getRequirements,
@@ -193,5 +204,6 @@ module.exports = {
     deleteRequirement,
     updateRequirement,
     addApplicationPeriod,
-    getActiveApplicationPeriod
+    getActiveApplicationPeriod,
+    updateApplicationPeriod
 }

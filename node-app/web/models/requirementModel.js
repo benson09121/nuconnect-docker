@@ -105,6 +105,21 @@ async function getActiveApplicationPeriod(){
     }
 }
 
+async function updateApplicationPeriod(){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL UpdateApplicationPeriod();',);
+        return rows[0];
+    }
+    catch (error) {
+        console.error('Error updating requirement period:', error);
+        throw error;
+    }
+    finally {
+        connection.release();
+    }
+}   
+
 module.exports = {
     addRequirement,
     getRequirements,
@@ -112,5 +127,6 @@ module.exports = {
     deleteRequirement,
     updateRequirement,
     addApplicationPeriod,
-    getActiveApplicationPeriod
+    getActiveApplicationPeriod,
+    updateApplicationPeriod
 };
