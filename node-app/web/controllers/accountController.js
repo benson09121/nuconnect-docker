@@ -15,7 +15,7 @@ async function getAccounts(req, res){
 }
 
 async function addAccount(req, res){
-    const { email, name, role, program } = req.rbody;
+    const { email, name, role, program } = req.body;
     const f_name = name.split(" ")[0];
     const l_name = name.split(" ")[1];
     try{

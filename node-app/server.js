@@ -15,7 +15,7 @@ const server = http.createServer(app);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload({
-    limits: { fileSize: 50 * 1024 * 1024 },
+    limits: {fileSize: 100 * 1024 * 1024},
     abortOnLimit: true, 
     safeFileNames: true,
     preserveExtension: true,
@@ -40,6 +40,8 @@ const organizationRoutes = require('./mobile/routes/organization');
 const authRoutesWeb = require('./web/routes/auth');
 const permissionRoutesWeb = require('./web/routes/permissions'); 
 const manageAccountsRoutesWeb = require('./web/routes/manageAccounts');
+const RequirementsRoutesWeb = require('./web/routes/requirements');
+const organizationsRoutesWeb = require('./web/routes/organizations');
 
 // Routes on Mobile
 app.use('/', indexRoutes);
@@ -52,6 +54,8 @@ app.use('/api/mobile', organizationRoutes);
 app.use('/api/web', authRoutesWeb);
 app.use('/api/web', permissionRoutesWeb);
 app.use('/api/web', manageAccountsRoutesWeb);
+app.use('/api/web', RequirementsRoutesWeb);
+app.use('/api/web', organizationsRoutesWeb);
 
 // Global error handler for unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
