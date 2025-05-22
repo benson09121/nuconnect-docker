@@ -1692,6 +1692,95 @@ END$$
 
 DELIMITER ;
 
+    -- For all events
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEvents()
+BEGIN
+    SELECT 
+        e.event_id,
+        e.title,
+        e.description,
+        e.date,
+        e.start_time,
+        e.end_time,
+        e.capacity,
+        e.certificate,
+        e.fee,
+        e.is_open_to_all,
+        e.organization_id,
+        o.name AS organization_name,
+        e.status,
+        e.type,
+        e.user_id,
+        e.venue,
+        e.created_at
+    FROM tbl_event e
+    JOIN tbl_organization o ON e.organization_id = o.organization_id;
+END $$
+
+DELIMITER ;
+
+    -- For viewing specific details of an event
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventById(IN p_event_id INT)
+BEGIN
+    SELECT 
+        e.event_id,
+        e.title,
+        e.description,
+        e.date,
+        e.start_time,
+        e.end_time,
+        e.capacity,
+        e.certificate,
+        e.fee,
+        e.is_open_to_all,
+        e.organization_id,
+        o.name AS organization_name,
+        e.status,
+        e.type,
+        e.user_id,
+        e.venue,
+        e.created_at
+    FROM tbl_event e
+    JOIN tbl_organization o ON e.organization_id = o.organization_id
+    WHERE e.event_id = p_event_id;
+END $$
+
+DELIMITER ;
+
+    -- Get event by status
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventsByStatus(IN p_status VARCHAR(20))
+BEGIN
+    SELECT 
+        e.event_id,
+        e.title,
+        e.description,
+        e.date,
+        e.start_time,
+        e.end_time,
+        e.capacity,
+        e.certificate,
+        e.fee,
+        e.is_open_to_all,
+        e.organization_id,
+        o.name AS organization_name,
+        e.status,
+        e.type,
+        e.user_id,
+        e.venue,
+        e.created_at
+    FROM tbl_event e
+    JOIN tbl_organization o ON e.organization_id = o.organization_id
+    WHERE e.status = p_status;
+END $$
+
+DELIMITER ;
+
 
 -- INDEXES
 
@@ -1787,9 +1876,24 @@ INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUE
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
 ("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
 
--- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
--- ("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
--- ("900f929ec408cb4d", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+("900f929ec408cb4d", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+
+INSERT INTO tbl_event (
+  event_id, title, description, date, start_time, end_time, capacity,
+  certificate, fee, is_open_to_all, organization_id, status, type, user_id,
+  venue, created_at
+) VALUES
+(1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
+
+(1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
+
+(1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
+
+(1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
+
+(1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
 
 -- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
 -- (2,"President");
