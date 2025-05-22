@@ -72,7 +72,7 @@ CREATE TABLE tbl_organization(
     is_recruiting BOOLEAN DEFAULT FALSE,
     is_open_to_all_courses BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (adviser_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (adviser_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_renewal_cycle (
@@ -83,7 +83,7 @@ CREATE TABLE tbl_renewal_cycle (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (organization_id, cycle_number),
     FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
-    FOREIGN KEY (president_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (president_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_organization_course(
@@ -94,22 +94,31 @@ CREATE TABLE tbl_organization_course(
     FOREIGN KEY (program_id) REFERENCES tbl_program(program_id) ON DELETE CASCADE	
 );
 
+CREATE TABLE tbl_executive_rank (
+    rank_id INT AUTO_INCREMENT PRIMARY KEY,
+    rank_level INT UNIQUE NOT NULL,
+    default_title VARCHAR(50) NOT NULL,
+    description VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE tbl_executive_role (
     executive_role_id INT AUTO_INCREMENT PRIMARY KEY,
     organization_id INT NOT NULL,
     cycle_number INT NOT NULL,
     role_title VARCHAR(100) NOT NULL,  -- e.g., 'President', 'Vice-President'
+    rank_id INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE,
+    FOREIGN KEY (rank_id) REFERENCES tbl_executive_rank(rank_id)
 );
 
-CREATE TABLE tbl_executive_role_permission (
-    executive_role_permission_id INT AUTO_INCREMENT PRIMARY KEY,
-    executive_role_id INT NOT NULL,
+CREATE TABLE tbl_rank_permission (
+    rank_id INT NOT NULL,
     permission_id INT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (executive_role_id) REFERENCES tbl_executive_role(executive_role_id) ON DELETE CASCADE,
-    FOREIGN KEY (permission_id) REFERENCES tbl_permission(permission_id) ON DELETE CASCADE
+    PRIMARY KEY (rank_id, permission_id),
+    FOREIGN KEY (rank_id) REFERENCES tbl_executive_rank(rank_id),
+    FOREIGN KEY (permission_id) REFERENCES tbl_permission(permission_id)
 );
 
 CREATE TABLE tbl_organization_members (
@@ -121,7 +130,7 @@ CREATE TABLE tbl_organization_members (
     executive_role_id INT DEFAULT NULL,
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE,
     FOREIGN KEY (executive_role_id) REFERENCES tbl_executive_role (executive_role_id) ON DELETE SET NULL
 );
 
@@ -143,7 +152,7 @@ CREATE TABLE tbl_membership_fees(
     amount DECIMAL(10,2) NOT NULL,
     paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_committee (
@@ -163,7 +172,7 @@ CREATE TABLE tbl_committee_members(
     role ENUM('Committee Head', 'Committee Officer') DEFAULT 'Committee Officer',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (committee_id) REFERENCES tbl_committee(committee_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_committee_role (
@@ -201,7 +210,7 @@ CREATE TABLE tbl_event (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     certificate VARCHAR(1000) DEFAULT NULL,
     FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_event_course(
@@ -219,7 +228,7 @@ CREATE TABLE tbl_event_attendance(
 		status ENUM('Registered', 'Not Registered','Attended') NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
-		FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+		FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_certificate_template (
@@ -229,7 +238,7 @@ CREATE TABLE tbl_certificate_template (
     uploaded_by VARCHAR(200) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
-    FOREIGN KEY (uploaded_by) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (uploaded_by) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_event_certificate (
@@ -241,7 +250,7 @@ CREATE TABLE tbl_event_certificate (
     verification_code VARCHAR(36) UNIQUE NOT NULL,
     issued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE,
     FOREIGN KEY (template_id) REFERENCES tbl_certificate_template(template_id) ON DELETE CASCADE,
     UNIQUE KEY unique_user_cert (event_id, user_id) -- One cert per user per event
 );
@@ -255,7 +264,7 @@ CREATE TABLE tbl_project_heads (
     project_name VARCHAR(255) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE
 );
 
@@ -326,7 +335,7 @@ CREATE TABLE tbl_approval_process(
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
     FOREIGN KEY (period_id) REFERENCES tbl_application_period(period_id) ON DELETE CASCADE,
-    FOREIGN KEY (approver_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (approver_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_application (
@@ -405,7 +414,7 @@ CREATE TABLE tbl_logs(
     user_id VARCHAR(200) NOT NULL,
     action TEXT NOT NULL,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 -- PROCEDURES
@@ -1019,12 +1028,12 @@ BEGIN
 
                         UNION ALL
 
-                        -- Executive role permissions
+                        -- Executive role permissions through ranks
                         SELECT p.permission_name
                         FROM tbl_organization_members om
                         JOIN tbl_executive_role er ON om.executive_role_id = er.executive_role_id
-                        JOIN tbl_executive_role_permission erp ON er.executive_role_id = erp.executive_role_id
-                        JOIN tbl_permission p ON erp.permission_id = p.permission_id
+                        JOIN tbl_rank_permission rp ON er.rank_id = rp.rank_id
+                        JOIN tbl_permission p ON rp.permission_id = p.permission_id
                         WHERE om.user_id = u.user_id
 
                         UNION ALL
@@ -1444,8 +1453,6 @@ BEGIN
   WHERE is_active = 1;
 END $$
 
-DELIMITER ;
-
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE CreateOrganizationApplication(
     IN p_organization JSON,
@@ -1463,7 +1470,10 @@ BEGIN
     DECLARE v_logo_filename VARCHAR(255);
     DECLARE v_sanitized_name VARCHAR(100);
     DECLARE i INT DEFAULT 0;
-    DECLARE v_executive_count INT;
+    DECLARE v_requirement_count INT;
+    DECLARE v_rank_number INT;
+    DECLARE v_rank_id INT;
+    DECLARE v_error_msg VARCHAR(255);
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -1503,32 +1513,47 @@ BEGIN
         v_program_id,
         'Pending',
         JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.fee_duration')),
-        JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.fee_amount')),
+        CAST(JSON_EXTRACT(p_organization, '$.fee_amount') AS DECIMAL(10,2)),
         FALSE,
         FALSE,
-        'Co-Curricular Organization'
+        JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.category'))
     );
 
     SET v_organization_id = LAST_INSERT_ID();
     SET v_org_name = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_name'));
     SET v_logo_filename = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_logo'));
-    SET v_sanitized_name = REPLACE(LOWER(v_org_name), ' ', '-');
+    SET v_sanitized_name = LOWER(REPLACE(v_org_name, ' ', '-'));
 
     -- Process executives
-    SET v_executive_count = JSON_LENGTH(p_executives);
-    WHILE i < v_executive_count DO
+    SET i = 0;
+    WHILE i < JSON_LENGTH(p_executives) DO
         BEGIN
             DECLARE v_fname VARCHAR(50);
             DECLARE v_lname VARCHAR(50);
             DECLARE v_role VARCHAR(100);
             DECLARE v_email VARCHAR(100);
-            DECLARE v_exec_user_id VARCHAR(200);
+            DECLARE v_exec_role_id INT;
             
             SET v_fname = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].f_name')));
             SET v_lname = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].l_name')));
             SET v_role = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].role_name')));
             SET v_email = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].nu_email')));
+            SET v_rank_number = CAST(JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].rank_number'))) AS UNSIGNED);
             
+            -- Validate rank exists
+            IF NOT EXISTS (
+                SELECT 1 
+                FROM tbl_executive_rank 
+                WHERE rank_level = v_rank_number
+            ) THEN
+                SET v_error_msg = CONCAT('Invalid rank number: ', v_rank_number);
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_error_msg;
+            END IF;
+
+            SELECT rank_id INTO v_rank_id 
+            FROM tbl_executive_rank 
+            WHERE rank_level = v_rank_number;
+
             -- Check/create user
             INSERT IGNORE INTO tbl_user (
                 user_id,
@@ -1544,21 +1569,55 @@ BEGIN
                 v_lname,
                 v_email,
                 v_program_id,
-                1,  -- Assuming role_id 1 = Student
+                1,
                 'Pending'
             );
 
-            IF UPPER(v_role) = 'PRESIDENT' THEN
+            -- Set president if rank is highest (5)
+            IF v_rank_number = 5 THEN
+                IF v_president_id IS NOT NULL THEN
+                    SET v_error_msg = 'Organization can only have one member with rank 5 (president equivalent)';
+                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_error_msg;
+                END IF;
                 SET v_president_id = v_email;
             END IF;
+
+            -- Create executive role
+            INSERT INTO tbl_executive_role (
+                organization_id,
+                cycle_number,
+                role_title,
+                rank_id
+            ) VALUES (
+                v_organization_id,
+                1,
+                v_role,
+                v_rank_id
+            );
+            
+            SET v_exec_role_id = LAST_INSERT_ID();
+            
+            INSERT INTO tbl_organization_members (
+                organization_id,
+                cycle_number,
+                user_id,
+                member_type,
+                executive_role_id
+            ) VALUES (
+                v_organization_id,
+                1,
+                v_email,
+                'Executive',
+                v_exec_role_id
+            );
 
             SET i = i + 1;
         END;
     END WHILE;
 
-    -- Validate president exists
+    -- Validate president exists (must have exactly one rank 5)
     IF v_president_id IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Organization must have a President';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Organization must have one member with rank 5 (president equivalent)';
     END IF;
 
     -- Create renewal cycle
@@ -1602,58 +1661,15 @@ BEGIN
 
     SET v_application_id = LAST_INSERT_ID();
 
-    -- Create executive roles and memberships
-    SET i = 0;
-    WHILE i < v_executive_count DO
-        BEGIN
-            DECLARE v_role_title VARCHAR(100);
-            DECLARE v_email VARCHAR(100);
-            DECLARE v_exec_role_id INT;
-            
-            SET v_role_title = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].role_name')));
-            SET v_email = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].nu_email')));
-            
-            -- Create executive role
-            INSERT INTO tbl_executive_role (
-                organization_id,
-                cycle_number,
-                role_title
-            ) VALUES (
-                v_organization_id,
-                1,
-                v_role_title
-            );
-            
-            SET v_exec_role_id = LAST_INSERT_ID();
-            
-            -- Link member to role
-            INSERT INTO tbl_organization_members (
-                organization_id,
-                cycle_number,
-                user_id,
-                member_type,
-                executive_role_id
-            ) VALUES (
-                v_organization_id,
-                1,
-                v_email,
-                'Executive',
-                v_exec_role_id
-            );
-
-            SET i = i + 1;
-        END;
-    END WHILE;
-
     -- Handle requirements
+    SET v_requirement_count = JSON_LENGTH(p_requirements);
     SET i = 0;
-    SET v_executive_count = JSON_LENGTH(p_requirements);
-    WHILE i < v_executive_count DO
+    WHILE i < v_requirement_count DO
         BEGIN
             DECLARE v_req_id INT;
             DECLARE v_file_path VARCHAR(255);
             
-            SET v_req_id = JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_id'));
+            SET v_req_id = CAST(JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_id'))) AS UNSIGNED);
             SET v_file_path = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_path')));
             
             INSERT INTO tbl_organization_requirement_submission (
@@ -1678,18 +1694,13 @@ BEGIN
 
     COMMIT;
 
-    -- Return generated paths and IDs for file handling
     SELECT 
         v_organization_id AS organization_id,
         v_application_id AS application_id,
         v_sanitized_name AS directory_name,
-        v_logo_filename AS logo_filename,
-        JSON_ARRAYAGG(JSON_OBJECT(
-            'requirement_id', requirement_id,
-            'filename', requirement_path
-        )) AS requirement_files;
+        CONCAT(v_sanitized_name, '/logo/', v_logo_filename) AS logo_path,
+        CONCAT(v_sanitized_name, '/requirements/') AS requirements_dir;
 END$$
-
 DELIMITER ;
 
     -- For all events
@@ -1902,6 +1913,17 @@ INSERT INTO tbl_event (
 -- VALUES (1, "900f929ec408cb4", "Member",null),
 -- (2, "86533891asdvf", "Executive",null),
 -- (2, "5fb95ed0a0d20daf","Member",1);
+
+-- 
+
+INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
+(5, 'President', 'Highest authority with full permissions'),
+(4, 'Vice President', 'Second-in-command'),
+(3, 'Secretary', 'Administrative lead'),
+(2, 'Treasurer', 'Financial manager'),
+(1, 'Officer', 'General executive member');
+
+-- QUESTIONS
 
 INSERT INTO tbl_evaluation_question_group (group_title, group_description, is_active)
 VALUES 
