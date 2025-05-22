@@ -1459,7 +1459,7 @@ CREATE DEFINER='admin'@'%' PROCEDURE CreateOrganizationApplication(
     IN p_executives JSON,
     IN p_requirements JSON,
     IN p_user_id VARCHAR(200)
-)
+    )
 BEGIN
     DECLARE v_organization_id INT;
     DECLARE v_program_id INT;
@@ -1523,60 +1523,8 @@ BEGIN
     SET v_org_name = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_name'));
     SET v_logo_filename = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_logo'));
     SET v_sanitized_name = LOWER(REPLACE(v_org_name, ' ', '-'));
-    
-    -- Find president first (we need this for renewal cycle)
-    SET i = 0;
-    WHILE i < JSON_LENGTH(p_executives) DO
-        BEGIN
-            DECLARE v_role VARCHAR(100);
-            DECLARE v_email VARCHAR(100);
-            
-            SET v_role = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].role_name')));
-            SET v_email = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].nu_email')));
-            
-            IF UPPER(v_role) = 'PRESIDENT' THEN
-                SET v_president_id = v_email;
-                -- Create the user if it doesn't exist
-                INSERT IGNORE INTO tbl_user (
-                    user_id,
-                    f_name,
-                    l_name,
-                    email,
-                    program_id,
-                    role_id,
-                    status
-                ) VALUES (
-                    v_email,
-                    JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].f_name'))),
-                    JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].l_name'))),
-                    v_email,
-                    v_program_id,
-                    1,
-                    'Pending'
-                );
-            END IF;
-            
-            SET i = i + 1;
-        END;
-    END WHILE;
 
-    -- Validate president exists
-    IF v_president_id IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Organization must have a President';
-    END IF;
-
-    -- Create renewal cycle BEFORE creating executive roles
-    INSERT INTO tbl_renewal_cycle (
-        organization_id,
-        cycle_number,
-        president_id
-    ) VALUES (
-        v_organization_id,
-        1,
-        v_president_id
-    );
-
-    -- Now process executives and create roles
+    -- Process executives
     SET i = 0;
     WHILE i < JSON_LENGTH(p_executives) DO
         BEGIN
@@ -1606,25 +1554,32 @@ BEGIN
             FROM tbl_executive_rank 
             WHERE rank_level = v_rank_number;
 
-            -- Check/create user (skip president who was already created)
-            IF UPPER(v_role) != 'PRESIDENT' THEN
-                INSERT IGNORE INTO tbl_user (
-                    user_id,
-                    f_name,
-                    l_name,
-                    email,
-                    program_id,
-                    role_id,
-                    status
-                ) VALUES (
-                    v_email,
-                    v_fname,
-                    v_lname,
-                    v_email,
-                    v_program_id,
-                    1,
-                    'Pending'
-                );
+            -- Check/create user
+            INSERT IGNORE INTO tbl_user (
+                user_id,
+                f_name,
+                l_name,
+                email,
+                program_id,
+                role_id,
+                status
+            ) VALUES (
+                v_email,
+                v_fname,
+                v_lname,
+                v_email,
+                v_program_id,
+                1,
+                'Pending'
+            );
+
+            -- Set president if rank is highest (5)
+            IF v_rank_number = 5 THEN
+                IF v_president_id IS NOT NULL THEN
+                    SET v_error_msg = 'Organization can only have one member with rank 5 (president equivalent)';
+                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_error_msg;
+                END IF;
+                SET v_president_id = v_email;
             END IF;
 
             -- Create executive role
@@ -1659,6 +1614,22 @@ BEGIN
             SET i = i + 1;
         END;
     END WHILE;
+
+    -- Validate president exists (must have exactly one rank 5)
+    IF v_president_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Organization must have one member with rank 5 (president equivalent)';
+    END IF;
+
+    -- Create renewal cycle
+    INSERT INTO tbl_renewal_cycle (
+        organization_id,
+        cycle_number,
+        president_id
+    ) VALUES (
+        v_organization_id,
+        1,
+        v_president_id
+    );
 
     -- Get active application period
     SELECT period_id INTO v_period_id 
