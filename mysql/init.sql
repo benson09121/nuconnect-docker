@@ -1342,6 +1342,7 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
+
 CREATE DEFINER='admin'@'%' PROCEDURE DeleteManagedAccount(
     IN p_email VARCHAR(100)
 )
@@ -1382,6 +1383,7 @@ BEGIN
         );
     END IF;
 END $$
+
 DELIMITER ;
 
     -- Unarchive account
@@ -2215,39 +2217,39 @@ VALUES
 ('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
 ('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
 
-INSERT INTO tbl_logs (
-    user_id,
-    timestamp,
-    action,
-    redirect_url,
-    file_path,
-    meta_data,
-    type
-) VALUES
--- Sample 1: File upload with redirect and metadata
-('USR00001', CURRENT_TIMESTAMP, 'Uploaded organization logo',
- '/organizations/NUD/details',
- '["/uploads/logos/nud_logo.png"]',
- '{"org_id": "NUD"}',
- 'file_upload'),
+-- INSERT INTO tbl_logs (
+--     user_id,
+--     timestamp,
+--     action,
+--     redirect_url,
+--     file_path,
+--     meta_data,
+--     type
+-- ) VALUES
+-- -- Sample 1: File upload with redirect and metadata
+-- ('USR00001', CURRENT_TIMESTAMP, 'Uploaded organization logo',
+--  '/organizations/NUD/details',
+--  '["/uploads/logos/nud_logo.png"]',
+--  '{"org_id": "NUD"}',
+--  'file_upload'),
 
--- Sample 2: Info log with redirect only
-('USR00002', CURRENT_TIMESTAMP, 'Viewed event details',
- '/events/45',
- NULL,
- '{"event_id": 45, "view_mode": "admin"}',
- 'info'),
+-- -- Sample 2: Info log with redirect only
+-- ('USR00002', CURRENT_TIMESTAMP, 'Viewed event details',
+--  '/events/45',
+--  NULL,
+--  '{"event_id": 45, "view_mode": "admin"}',
+--  'info'),
 
--- Sample 3: Error log without redirect
-('USR00003', CURRENT_TIMESTAMP, 'Failed to submit event proposal due to missing requirements',
- NULL,
- NULL,
- '{"attempted_event_id": 50}',
- 'error'),
+-- -- Sample 3: Error log without redirect
+-- ('USR00003', CURRENT_TIMESTAMP, 'Failed to submit event proposal due to missing requirements',
+--  NULL,
+--  NULL,
+--  '{"attempted_event_id": 50}',
+--  'error'),
 
--- Sample 4: System-generated log with no user
-('SYSTEM', CURRENT_TIMESTAMP, 'Daily analytics summary generated',
- '/analytics/summary/daily',
- NULL,
- '{"records_processed": 932}',
- 'system');
+-- -- Sample 4: System-generated log with no user
+-- ('SYSTEM', CURRENT_TIMESTAMP, 'Daily analytics summary generated',
+--  '/analytics/summary/daily',
+--  NULL,
+--  '{"records_processed": 932}',
+--  'system');
