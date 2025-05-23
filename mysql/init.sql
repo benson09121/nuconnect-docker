@@ -2004,6 +2004,26 @@ END $$
 
 DELIMITER ;
 
+    -- Get logs
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetLogs()
+BEGIN
+    SELECT 
+        log_id,
+        user_id,
+        timestamp,
+        action,
+        redirect_url,
+        file_path,
+        meta_data,
+        type
+    FROM tbl_logs
+    ORDER BY timestamp DESC;
+END $$
+
+DELIMITER ;
+
 
 -- INDEXES
 
@@ -2084,7 +2104,6 @@ VALUES
 (2,6),
 (2,9),
 (2,23);
-
 
 
 INSERT INTO tbl_program (name, description) VALUES 
