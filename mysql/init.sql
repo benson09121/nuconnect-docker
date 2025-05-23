@@ -198,13 +198,15 @@ CREATE TABLE tbl_event (
     user_id VARCHAR(200) NOT NULL,
     title VARCHAR(300) NOT NULL,
     description TEXT NOT NULL,
+    venue_type ENUM('Face to face', 'Online') DEFAULT 'face to face',
     venue VARCHAR(200) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
     start_time TIME NOT NULL,
     end_time TIME NOT NULL,
     status ENUM('Pending', 'Approved', 'Rejected', "Archived") DEFAULT 'Pending',
     type ENUM("Paid","Free"),
-    date DATE NOT NULL,
-    is_open_to_all BOOLEAN DEFAULT FALSE,
+    is_open_to ENUM("Members only", "Open to all", "NU Students only") DEFAULT "Members only",
     fee INT NULL,
     capacity INT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -213,13 +215,39 @@ CREATE TABLE tbl_event (
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
-CREATE TABLE tbl_event_course(
-	event_id INT NOT NULL,
-	program_id INT NOT NULL,
-    PRIMARY KEY (event_id, program_id),
-    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
-    FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
+CREATE TABLE tbl_event_requirements(
+    requirement_id INT AUTO_INCRE    requirement_type ENUM('PRE-EVENT', 'POST-EVENT') NOT NULL,
+    requirement_name VARCHAR(255) NOT NULL,
+    requirement_file_path VARCHAR(255) NOT NULL,
+    created_by VARCHAR(200) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
+
 );
+
+CREATE TABLE tbl_event_requirement_submissions (
+    submission_id INT AUTO_INCREMENT PRIMARY KEY,
+    event_id INT,
+    requirement_id INT NOT NULL,
+    cycle_number INT NOT NULL,
+    organization_id INT NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    submitted_by VARCHAR(200) NOT NULL,
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
+    FOREIGN KEY (requirement_id) REFERENCES tbl_event_requirements(requirement_id),
+    FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id),
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
+);
+
+-- CREATE TABLE tbl_event_course(
+-- 	event_id INT NOT NULL,
+-- 	program_id INT NOT NULL,
+--     PRIMARY KEY (event_id, program_id),
+--     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
+--     FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
+-- );
 
 CREATE TABLE tbl_event_attendance(
 		attendance_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -1891,20 +1919,20 @@ INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, st
 ("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
 ("900f929ec408cb4d", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
-INSERT INTO tbl_event (
-  event_id, title, description, date, start_time, end_time, capacity,
-  certificate, fee, is_open_to_all, organization_id, status, type, user_id,
-  venue, created_at
-) VALUES
-(1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
+-- INSERT INTO tbl_event (
+--   event_id, title, description, date, start_time, end_time, capacity,
+--   certificate, fee, is_open_to_all, organization_id, status, type, user_id,
+--   venue, created_at
+-- ) VALUES
+-- (1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
 
-(1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
+-- (1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
 
-(1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
+-- (1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
 
-(1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
+-- (1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
 
-(1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
+-- (1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
 
 -- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
 -- (2,"President");
