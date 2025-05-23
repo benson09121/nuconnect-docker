@@ -216,12 +216,12 @@ CREATE TABLE tbl_event (
 );
 
 CREATE TABLE tbl_event_requirements(
-    requirement_id INT AUTO_INCRE    requirement_type ENUM('PRE-EVENT', 'POST-EVENT') NOT NULL,
+    requirement_id INT AUTO_INCREMENT PRIMARY KEY,
+    requirement_type ENUM('PRE-EVENT', 'POST-EVENT') NOT NULL,
     requirement_name VARCHAR(255) NOT NULL,
     requirement_file_path VARCHAR(255) NOT NULL,
     created_by VARCHAR(200) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
     FOREIGN KEY (created_by) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 
 );
@@ -241,13 +241,13 @@ CREATE TABLE tbl_event_requirement_submissions (
     FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
 );
 
--- CREATE TABLE tbl_event_course(
--- 	event_id INT NOT NULL,
--- 	program_id INT NOT NULL,
---     PRIMARY KEY (event_id, program_id),
---     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
---     FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
--- );
+CREATE TABLE tbl_event_course(
+	event_id INT NOT NULL,
+	program_id INT NOT NULL,
+    PRIMARY KEY (event_id, program_id),
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
+    FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
+);
 
 CREATE TABLE tbl_event_attendance(
 		attendance_id INT AUTO_INCREMENT PRIMARY KEY,
