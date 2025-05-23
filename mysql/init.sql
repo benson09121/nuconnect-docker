@@ -2051,19 +2051,21 @@ BEGIN
         e.event_id,
         e.title,
         e.description,
-        e.date,
+        e.start_date,
+        e.end_date,
         e.start_time,
         e.end_time,
         e.capacity,
         e.certificate,
         e.fee,
-        e.is_open_to_all,
+        e.is_open_to,
+        e.venue_type,
+        e.venue,
         e.organization_id,
         o.name AS organization_name,
         e.status,
         e.type,
         e.user_id,
-        e.venue,
         e.created_at
     FROM tbl_event e
     JOIN tbl_organization o ON e.organization_id = o.organization_id;
@@ -2080,19 +2082,21 @@ BEGIN
         e.event_id,
         e.title,
         e.description,
-        e.date,
+        e.start_date,
+        e.end_date,
         e.start_time,
         e.end_time,
         e.capacity,
         e.certificate,
         e.fee,
-        e.is_open_to_all,
+        e.is_open_to,
+        e.venue_type,
+        e.venue,
         e.organization_id,
         o.name AS organization_name,
         e.status,
         e.type,
         e.user_id,
-        e.venue,
         e.created_at
     FROM tbl_event e
     JOIN tbl_organization o ON e.organization_id = o.organization_id
@@ -2110,19 +2114,21 @@ BEGIN
         e.event_id,
         e.title,
         e.description,
-        e.date,
+        e.start_date,
+        e.end_date,
         e.start_time,
         e.end_time,
         e.capacity,
         e.certificate,
         e.fee,
-        e.is_open_to_all,
+        e.is_open_to,
+        e.venue_type,
+        e.venue,
         e.organization_id,
         o.name AS organization_name,
         e.status,
         e.type,
         e.user_id,
-        e.venue,
         e.created_at
     FROM tbl_event e
     JOIN tbl_organization o ON e.organization_id = o.organization_id
@@ -2250,19 +2256,34 @@ INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, st
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
 INSERT INTO tbl_event (
-  event_id, title, description, date, start_time, end_time, capacity,
-  certificate, fee, is_open_to_all, organization_id, status, type, user_id,
-  venue, created_at
+  event_id,
+  organization_id,
+  user_id,
+  title,
+  description,
+  venue_type,
+  venue,
+  start_date,
+  end_date,
+  start_time,
+  end_time,
+  status,
+  type,
+  is_open_to,
+  fee,
+  capacity,
+  created_at,
+  certificate
 ) VALUES
-(1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
+(1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
 
-(1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
+(1002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Groove Jam 2025', 'Annual inter-school dance battle', 'Face to face', 'Open Grounds', '2025-07-20', '2025-07-20', '13:00:00', '19:00:00', 'Approved', 'Free', 'Open to all', 0, 300, '2025-05-05 10:30:00', 'Winner + Participation'),
 
-(1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
+(1003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Hack-It-Out', '24-hour Hackathon for IT majors', 'Face to face', 'Tech Lab 101', '2025-08-05', '2025-08-05', '08:00:00', '08:00:00', 'Pending', 'Paid', 'Members only', 200, 60, '2025-05-12 15:45:00', 'Certificate + Swag'),
 
-(1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
+(1004, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Earth Hour Rally', 'Tree planting and cleanup event', 'Face to face', 'Community Park', '2025-06-15', '2025-06-15', '06:30:00', '10:30:00', 'Approved', 'Free', 'Open to all', 0, 150, '2025-05-15 09:00:00', 'Eco Warrior Badge'),
 
-(1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
+(1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Archived', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate');
 
 -- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
 -- (2,"President");

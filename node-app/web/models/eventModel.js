@@ -24,7 +24,7 @@ async function getEvents() {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetEvents();');
-        return rows;
+        return rows[0];
     } finally {
         connection.release();
     }
@@ -44,7 +44,7 @@ async function getEventsByStatus(status) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetEventsByStatus(?);', [status]);
-        return rows;
+        return rows[0];
     } finally {
         connection.release();
     }
