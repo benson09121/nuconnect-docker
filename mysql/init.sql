@@ -207,19 +207,47 @@ CREATE TABLE tbl_event (
     user_id VARCHAR(200) NOT NULL,
     title VARCHAR(300) NOT NULL,
     description TEXT NOT NULL,
+    venue_type ENUM('Face to face', 'Online') DEFAULT 'face to face',
     venue VARCHAR(200) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
     start_time TIME NOT NULL,
     end_time TIME NOT NULL,
     status ENUM('Pending', 'Approved', 'Rejected', "Archived") DEFAULT 'Pending',
     type ENUM("Paid","Free"),
-    date DATE NOT NULL,
-    is_open_to_all BOOLEAN DEFAULT FALSE,
+    is_open_to ENUM("Members only", "Open to all", "NU Students only") DEFAULT "Members only",
     fee INT NULL,
     capacity INT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     certificate VARCHAR(1000) DEFAULT NULL,
     FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
+);
+
+CREATE TABLE tbl_event_requirements(
+    requirement_id INT AUTO_INCREMENT PRIMARY KEY,
+    requirement_type ENUM('PRE-EVENT', 'POST-EVENT') NOT NULL,
+    requirement_name VARCHAR(255) NOT NULL,
+    requirement_file_path VARCHAR(255) NOT NULL,
+    created_by VARCHAR(200) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
+
+);
+
+CREATE TABLE tbl_event_requirement_submissions (
+    submission_id INT AUTO_INCREMENT PRIMARY KEY,
+    event_id INT,
+    requirement_id INT NOT NULL,
+    cycle_number INT NOT NULL,
+    organization_id INT NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    submitted_by VARCHAR(200) NOT NULL,
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
+    FOREIGN KEY (requirement_id) REFERENCES tbl_event_requirements(requirement_id),
+    FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id),
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
 );
 
 CREATE TABLE tbl_event_course(
