@@ -38,14 +38,15 @@ CREATE TABLE tbl_program(
 
 CREATE TABLE tbl_user(
     user_id VARCHAR(200) UNIQUE NOT NULL PRIMARY KEY,
-    f_name VARCHAR(50) NOT NULL,
-    l_name VARCHAR(50) NOT NULL,
+    f_name VARCHAR(50) NULL,
+    l_name VARCHAR(50) NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     program_id INT NULL,
     role_id INT NOT NULL,
     profile_picture VARCHAR(255),
-    status ENUM('Active', 'Inactive', 'Pending', 'Archive') DEFAULT 'Active',
+    status ENUM('Active', 'Pending', 'Archive') DEFAULT 'Active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     archived_at TIMESTAMP NULL,
     FOREIGN KEY (role_id) REFERENCES tbl_role(role_id),
     FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
@@ -306,6 +307,7 @@ CREATE TABLE tbl_evaluation (
     event_id INT NOT NULL,
     user_id VARCHAR(200) NOT NULL,
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    duration_seconds INT DEFAULT NULL,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id)
 );
@@ -1201,6 +1203,7 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
+
 CREATE DEFINER='admin'@'%' PROCEDURE GetManagedAccounts()
 BEGIN
     DECLARE student_role_id INT;
@@ -1219,14 +1222,36 @@ BEGIN
                     'program', p.name,
                     'role', r.role_name,
                     'status', u.status,
-                    'created_at', u.created_at
+                    'created_at', u.created_at,
+                    'updated_at', u.updated_at
                 )
              )
              FROM tbl_user u
              JOIN tbl_role r ON u.role_id = r.role_id
-            LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             LEFT JOIN tbl_program p ON u.program_id = p.program_id
              WHERE u.role_id != student_role_id
-               AND u.status IN ('Active', 'Pending')
+               AND u.status = 'Active'
+            ), 
+            JSON_ARRAY()
+        ),
+        'pending_accounts', COALESCE(
+            (SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'user_id', u.user_id,
+                    'name', CONCAT(u.f_name, ' ', u.l_name),
+                    'email', u.email,
+                    'program', p.name,
+                    'role', r.role_name,
+                    'status', u.status,
+                    'created_at', u.created_at,
+                    'updated_at', u.updated_at
+                )
+             )
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
+             LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             WHERE u.role_id != student_role_id
+               AND u.status = 'Pending'
             ), 
             JSON_ARRAY()
         ),
@@ -1238,12 +1263,15 @@ BEGIN
                     'program', p.name,
                     'email', u.email,
                     'role', r.role_name,
-                    'archived_at', u.created_at  -- Consider adding archived_at column
+                    'status', u.status,
+                    'created_at', u.created_at,
+                    'archived_at', u.archived_at,
+                    'updated_at', u.updated_at
                 )
              )
              FROM tbl_user u
              JOIN tbl_role r ON u.role_id = r.role_id
-            LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             LEFT JOIN tbl_program p ON u.program_id = p.program_id
              WHERE u.role_id != student_role_id
                AND u.status = 'Archive'
             ),
@@ -1253,7 +1281,7 @@ BEGIN
             (SELECT JSON_ARRAYAGG(
                 JSON_OBJECT(
                     'program_id', p.program_id,
-                    'program_name', p.name  -- Changed from program_name to name
+                    'program_name', p.name
                 )
              )
              FROM tbl_program p),
@@ -1278,9 +1306,7 @@ DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE AddManagedAccount(
     IN p_email VARCHAR(100),
     IN p_role_name VARCHAR(100),
-    IN p_program_id INT,
-    IN p_f_name VARCHAR(50),
-    IN p_l_name VARCHAR(50)
+    IN p_program_id INT
 )
 BEGIN
     DECLARE v_role_id INT;
@@ -1312,33 +1338,110 @@ BEGIN
         -- Update existing account
         UPDATE tbl_user
         SET role_id = v_role_id,
-            program_id = p_program_id,
-            f_name = p_f_name,
-            l_name = p_l_name
+            program_id = p_program_id
         WHERE email = p_email;
+
+        -- Log the update
+        INSERT INTO tbl_logs (
+            user_id,
+            action,
+            type
+        ) VALUES (
+            (SELECT user_id FROM tbl_user WHERE email = p_email),
+            'Updated managed account',
+            'account'
+        );
     ELSE
         -- Create new pending account
         INSERT INTO tbl_user (
             user_id,
-            f_name,
-            l_name,
             email,
             role_id,
             program_id,
             status
         ) VALUES (
             CONCAT('pending-', UUID()),
-            p_f_name,
-            p_l_name,
             p_email,
             v_role_id,
             p_program_id,
             'Pending'
         );
+
+        -- Log the creation
+        INSERT INTO tbl_logs (
+            user_id,
+            action,
+            type
+        ) VALUES (
+            (SELECT user_id FROM tbl_user WHERE email = p_email),
+            'Created managed account',
+            'account'
+        );
     END IF;
 
     COMMIT;
 END $$
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE UpdateManagedAccount(
+    IN p_user_id VARCHAR(200),
+    IN p_email VARCHAR(100),
+    IN p_role_name VARCHAR(100),
+    IN p_program_name VARCHAR(100),
+    IN p_status ENUM('Active', 'Pending', 'Archive')
+)
+BEGIN
+    DECLARE v_role_id INT;
+    DECLARE v_program_id INT;
+
+    -- Get role ID from role name
+    SELECT role_id INTO v_role_id 
+    FROM tbl_role 
+    WHERE role_name = p_role_name;
+
+    IF v_role_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Invalid role specified';
+    END IF;
+
+    -- Set program_id to NULL if program_name is 'not_applicable', else get program_id
+    IF p_program_name = 'not_applicable' THEN
+        SET v_program_id = NULL;
+    ELSE
+        SELECT program_id INTO v_program_id
+        FROM tbl_program
+        WHERE name = p_program_name;
+
+        IF v_program_id IS NULL THEN
+            SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Invalid program specified';
+        END IF;
+    END IF;
+
+    -- Update the account, including email
+    UPDATE tbl_user
+    SET 
+        email = p_email,
+        role_id = v_role_id,
+        program_id = v_program_id,
+        status = p_status,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = p_user_id;
+
+    -- Log the update
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type
+    ) VALUES (
+        p_user_id,
+        'Updated managed account',
+        'account'
+    );
+END $$
+
 DELIMITER ;
 
 DELIMITER $$
@@ -1390,32 +1493,26 @@ DELIMITER ;
 DELIMITER $$
 
 CREATE DEFINER='admin'@'%' PROCEDURE UnarchiveManagedAccount(
-    IN p_email VARCHAR(100)
+    IN p_user_id VARCHAR(200)
 )
 BEGIN
     DECLARE user_count INT;
-    DECLARE v_user_id VARCHAR(200);
 
     -- Check if user exists
     SELECT COUNT(*) INTO user_count
     FROM tbl_user 
-    WHERE email = p_email;
+    WHERE user_id = p_user_id;
 
     IF user_count = 0 THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'User not found';
     ELSE
-        -- Get the user_id for logging
-        SELECT user_id INTO v_user_id
-        FROM tbl_user
-        WHERE email = p_email;
-
         -- Unarchive user
         UPDATE tbl_user
         SET 
             status = 'Active',
             archived_at = NULL
-        WHERE email = p_email;
+        WHERE user_id = p_user_id;
 
         -- Log the action using the correct user_id
         INSERT INTO tbl_logs (
@@ -1423,7 +1520,7 @@ BEGIN
             action,
             type
         ) VALUES (
-            v_user_id,
+            p_user_id,
             'Unarchived managed account',
             'account'
         );
@@ -2120,24 +2217,24 @@ INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUE
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
 ("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
 
--- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
--- ("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
--- ("900f929ec408cb4d", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
--- INSERT INTO tbl_event (
---   event_id, title, description, date, start_time, end_time, capacity,
---   certificate, fee, is_open_to_all, organization_id, status, type, user_id,
---   venue, created_at
--- ) VALUES
--- (1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
+INSERT INTO tbl_event (
+  event_id, title, description, date, start_time, end_time, capacity,
+  certificate, fee, is_open_to_all, organization_id, status, type, user_id,
+  venue, created_at
+) VALUES
+(1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
 
--- (1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
+(1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
 
--- (1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
+(1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
 
--- (1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
+(1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
 
--- (1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
+(1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
 
 -- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
 -- (2,"President");

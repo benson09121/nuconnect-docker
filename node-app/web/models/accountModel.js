@@ -15,14 +15,32 @@ async function getAccounts() {
     }
 }
 
-    async function addAccount(email, role, program, firstName, lastName) {
+    async function addAccount(email, role, program) {
         const connection = await pool.getConnection();
         try {
-            const [rows] = await connection.query('CALL AddManagedAccount(?, ?, ?, ?, ?)', [email, role, program, firstName, lastName]);
+            const [rows] = await connection.query('CALL AddManagedAccount(?, ?, ?)', [email, role, program]);
             return rows[0];
         }
         catch (error) {
             console.error('Error adding account:', error);
+            throw error;
+        }
+        finally {
+            connection.release();
+        }
+    }
+
+    async function updateAccount(user_id, email, role, program, status) {
+        const connection = await pool.getConnection();
+        try {
+            const [rows] = await connection.query(
+                'CALL UpdateManagedAccount(?, ?, ?, ?, ?)',
+                [user_id, email, role, program, status]
+            );
+            return rows[0];
+        }
+        catch (error) {
+            console.error('Error updating account:', error);
             throw error;
         }
         finally {
@@ -45,10 +63,10 @@ async function getAccounts() {
         }
     }
 
-    async function unarchiveAccount(email) {
+    async function unarchiveAccount(user_id) {
         const connection = await pool.getConnection();
         try {
-            const [rows] = await connection.query('CALL UnarchiveManagedAccount(?)', [email]);
+            const [rows] = await connection.query('CALL UnarchiveManagedAccount(?)', [user_id]);
             return rows[0];
         }
         catch (error) {
@@ -63,6 +81,7 @@ async function getAccounts() {
 module.exports = {
     getAccounts,
     addAccount,
+    updateAccount,
     deleteAccount,
     unarchiveAccount
 };
