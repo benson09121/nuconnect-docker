@@ -409,13 +409,27 @@ CREATE TABLE tbl_notification_recipient (
     FOREIGN KEY (notification_id) REFERENCES tbl_notification(notification_id) ON DELETE CASCADE
 );
 
-CREATE TABLE tbl_logs(
+-- CREATE TABLE tbl_logs(
+--     log_id INT AUTO_INCREMENT PRIMARY KEY,
+--     user_id VARCHAR(200) NOT NULL,
+--     action TEXT NOT NULL,
+--     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
+-- );
+
+    -- Improved table for logs
+CREATE TABLE tbl_logs (
     log_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id VARCHAR(200) NOT NULL,
-    action TEXT NOT NULL,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    action TEXT NOT NULL,
+    redirect_url VARCHAR(500) DEFAULT NULL,
+    file_path TEXT DEFAULT NULL, -- can store JSON array as string
+    meta_data JSON DEFAULT NULL, -- flexible key-value storage
+    type VARCHAR(100) DEFAULT NULL,
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
+
 
 -- PROCEDURES
 use db_nuconnect;
@@ -1322,7 +1336,9 @@ CREATE DEFINER='admin'@'%' PROCEDURE DeleteManagedAccount(
 )
 BEGIN
     DECLARE user_count INT;
+    DECLARE v_user_id VARCHAR(200);
     
+    -- Check if the user exists
     SELECT COUNT(*) INTO user_count
     FROM tbl_user 
     WHERE email = p_email;
@@ -1331,14 +1347,76 @@ BEGIN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'User not found';
     ELSE
+        -- Get the user_id to log the action properly
+        SELECT user_id INTO v_user_id
+        FROM tbl_user
+        WHERE email = p_email;
 
+        -- Archive the user
         UPDATE tbl_user
         SET 
             status = 'Archive',
             archived_at = CURRENT_TIMESTAMP
         WHERE email = p_email;
+
+        -- Log the archiving
+        INSERT INTO tbl_logs (
+            user_id,
+            action,
+            type
+        ) VALUES (
+            v_user_id,
+            'Archived managed account',
+            'account'
+        );
     END IF;
 END $$
+DELIMITER ;
+
+    -- Unarchive account
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE UnarchiveManagedAccount(
+    IN p_email VARCHAR(100)
+)
+BEGIN
+    DECLARE user_count INT;
+    DECLARE v_user_id VARCHAR(200);
+
+    -- Check if user exists
+    SELECT COUNT(*) INTO user_count
+    FROM tbl_user 
+    WHERE email = p_email;
+
+    IF user_count = 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'User not found';
+    ELSE
+        -- Get the user_id for logging
+        SELECT user_id INTO v_user_id
+        FROM tbl_user
+        WHERE email = p_email;
+
+        -- Unarchive user
+        UPDATE tbl_user
+        SET 
+            status = 'Active',
+            archived_at = NULL
+        WHERE email = p_email;
+
+        -- Log the action using the correct user_id
+        INSERT INTO tbl_logs (
+            user_id,
+            action,
+            type
+        ) VALUES (
+            v_user_id,
+            'Unarchived managed account',
+            'account'
+        );
+    END IF;
+END $$
+
 DELIMITER ;
 
 DELIMITER $$
@@ -1983,3 +2061,40 @@ VALUES
 ('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
 ('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
 ('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
+
+INSERT INTO tbl_logs (
+    user_id,
+    timestamp,
+    action,
+    redirect_url,
+    file_path,
+    meta_data,
+    type
+) VALUES
+-- Sample 1: File upload with redirect and metadata
+('USR00001', CURRENT_TIMESTAMP, 'Uploaded organization logo',
+ '/organizations/NUD/details',
+ '["/uploads/logos/nud_logo.png"]',
+ '{"org_id": "NUD"}',
+ 'file_upload'),
+
+-- Sample 2: Info log with redirect only
+('USR00002', CURRENT_TIMESTAMP, 'Viewed event details',
+ '/events/45',
+ NULL,
+ '{"event_id": 45, "view_mode": "admin"}',
+ 'info'),
+
+-- Sample 3: Error log without redirect
+('USR00003', CURRENT_TIMESTAMP, 'Failed to submit event proposal due to missing requirements',
+ NULL,
+ NULL,
+ '{"attempted_event_id": 50}',
+ 'error'),
+
+-- Sample 4: System-generated log with no user
+('SYSTEM', CURRENT_TIMESTAMP, 'Daily analytics summary generated',
+ '/analytics/summary/daily',
+ NULL,
+ '{"records_processed": 932}',
+ 'system');

@@ -15,25 +15,47 @@ async function getAccounts(req, res){
 }
 
 async function addAccount(req, res){
-    const { email, name, role, program } = req.body;
-    const f_name = name.split(" ")[0];
-    const l_name = name.split(" ")[1];
+    const { email, firstName, lastName, role, program } = req.body;
     try{
-        const accounts = await accountModel.addAccount(email, role, program, f_name, l_name);
-        res.status(200).json(accounts);
+        const accounts = await accountModel.addAccount(email, role, program, firstName, lastName);
+        res.status(200).json({
+            success: true,
+            message: "Account added successfully.",
+            data: accounts
+        });
     } catch (error) {
         res.status(500).json({
+            success: false,
             error: error.message || "An error occurred while fetching the accounts.",
         });
     }
-    
 }
 
 async function deleteAccount(req, res){
     const { email } = req.params;
     try{
         const accounts = await accountModel.deleteAccount(email);
-        res.status(200).json(accounts);
+        res.status(200).json({
+            success: true,
+            message: "Account archived successfully.",
+            data: accounts
+        });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the accounts.",
+        });
+    }
+}
+
+async function unarchiveAccount(req, res){
+    const { email } = req.params;
+    try{
+        const accounts = await accountModel.unarchiveAccount(email);
+        res.status(200).json({
+            success: true,
+            message: "Account unarchived successfully.",
+            data: accounts
+        });
     } catch (error) {
         res.status(500).json({
             error: error.message || "An error occurred while fetching the accounts.",
@@ -44,5 +66,6 @@ async function deleteAccount(req, res){
 module.exports = {
     getAccounts,
     addAccount,
-    deleteAccount
+    deleteAccount,
+    unarchiveAccount
 };
