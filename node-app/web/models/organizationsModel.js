@@ -16,7 +16,23 @@ async function createOrganizationApplication(organizations, executives, requirem
     }
 }
 
+async function getSpecificApplication(user_id, organization_name){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetSpecificApplication(?, ?);', [user_id, organization_name]);
+        return rows[0];
+    }
+    catch (error) {
+        console.error('Error adding requirement period:', error);
+        throw error;
+    }
+    finally {
+        connection.release();
+    }
+}
+
 
 module.exports = {
   createOrganizationApplication,
+  getSpecificApplication
 };

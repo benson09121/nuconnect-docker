@@ -18,7 +18,16 @@ USE db_nuconnect;
 CREATE TABLE tbl_role(
     role_id INT AUTO_INCREMENT PRIMARY KEY,
     role_name VARCHAR(100) UNIQUE NOT NULL,
+    is_approver BOOLEAN DEFAULT FALSE,
+    hierarchy_order INT UNIQUE NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE tbl_approval_role (
+    approval_role_id INT AUTO_INCREMENT PRIMARY KEY,
+    role_Id INT NOT NULL,
+    hierarchy_order INT UNIQUE NOT NULL,
+    description VARCHAR(255),
+    FOREIGN KEY (role_id) REFERENCES tbl_role(role_id) ON DELETE CASCADE
 );
 
 CREATE TABLE tbl_program(
@@ -328,6 +337,7 @@ CREATE TABLE tbl_approval_process(
     organization_id INT NOT NULL,
     period_id INT NULL,
     approver_id VARCHAR(200) NOT NULL,
+    approval_role_id INT NOT NULL,
     application_type ENUM('new', 'renewal') NOT NULL DEFAULT 'new',
     status ENUM('Pending', 'Approved', 'Rejected') DEFAULT 'Pending',
     comment TEXT,
@@ -335,7 +345,8 @@ CREATE TABLE tbl_approval_process(
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
     FOREIGN KEY (period_id) REFERENCES tbl_application_period(period_id) ON DELETE CASCADE,
-    FOREIGN KEY (approver_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
+    FOREIGN KEY (approver_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE,
+    FOREIGN KEY (approval_role_id) REFERENCES tbl_role(role_id) ON DELETE CASCADE
 );
 
 CREATE TABLE tbl_application (
@@ -345,7 +356,7 @@ CREATE TABLE tbl_application (
     application_type ENUM('new', 'renewal') NOT NULL,
     period_id INT NOT NULL,
     applicant_user_id VARCHAR(200) NOT NULL,
-    status ENUM('submitted', 'under_review', 'approved', 'rejected') DEFAULT 'under_review',
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE SET NULL ,
@@ -661,12 +672,11 @@ BEGIN
     FROM tbl_event_attendance ea
     INNER JOIN tbl_event e ON ea.event_id = e.event_id
     INNER JOIN tbl_organization o ON e.organization_id = o.organization_id
-    WHERE (ea.user_id = p_user_id) AND (ea.status = "Registered" OR "Attended")
+    WHERE (ea.user_id = p_user_id) AND (ea.status = "Registered" OR ea.status = "Attended")
     ORDER BY e.date DESC, e.start_time DESC;
 END $$
 DELIMITER ;
 
-DELIMITER $$
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizations(IN p_user_id VARCHAR(200))
 BEGIN
@@ -1055,23 +1065,24 @@ BEGIN
             (
                 SELECT JSON_ARRAYAGG(JSON_OBJECT(
                     'name', orgs.name,
-                    'logo', orgs.logo
+                    'logo', orgs.logo,
+                    'status', orgs.status
                 ))
                 FROM (
-                    SELECT o.name, o.logo
+                    SELECT o.name, o.logo, o.status
                     FROM tbl_organization o
                     WHERE o.adviser_id = u.user_id
 
                     UNION
 
-                    SELECT o.name, o.logo
+                    SELECT o.name, o.logo, o.status
                     FROM tbl_organization_members om
                     JOIN tbl_renewal_cycle rc ON om.organization_id = rc.organization_id 
                         AND om.cycle_number = rc.cycle_number
                     JOIN tbl_organization o ON om.organization_id = o.organization_id
                     WHERE om.user_id = u.user_id
                 ) AS orgs
-                GROUP BY orgs.name, orgs.logo
+                GROUP BY orgs.name, orgs.logo, orgs.status
             ),
             JSON_ARRAY()
         )
@@ -1452,6 +1463,109 @@ BEGIN
   SET is_active = 0
   WHERE is_active = 1;
 END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE InitiateApprovalProcess(IN p_application_id INT)
+BEGIN
+    DECLARE v_org_id INT;
+    DECLARE v_program_id INT;
+    DECLARE v_adviser_id VARCHAR(200);
+    DECLARE v_step INT DEFAULT 1;
+    DECLARE v_role_name VARCHAR(50);
+    DECLARE v_approver_id VARCHAR(200);
+    DECLARE v_role_id INT;
+    
+    -- Get organization and program details
+    SELECT o.organization_id, o.base_program_id, o.adviser_id
+    INTO v_org_id, v_program_id, v_adviser_id
+    FROM tbl_application a
+    JOIN tbl_organization o ON a.organization_id = o.organization_id
+    WHERE a.application_id = p_application_id;
+
+    -- Create approval steps
+    WHILE v_step <= 5 DO
+        BEGIN
+            -- Determine role for current step
+            SET v_role_name = CASE v_step
+                WHEN 1 THEN 'Adviser'
+                WHEN 2 THEN 'Program Chair'
+                WHEN 3 THEN 'Dean'
+                WHEN 4 THEN 'Academic Director'
+                WHEN 5 THEN 'SDAO'
+            END;
+
+            -- Get role ID from tbl_role
+            SELECT role_id INTO v_role_id 
+            FROM tbl_role 
+            WHERE role_name = v_role_name;
+
+            -- Special handling for first step (organization adviser)
+            IF v_step = 1 THEN
+                -- Validate adviser exists and has correct role
+                IF NOT EXISTS (
+                    SELECT 1 FROM tbl_user 
+                    WHERE user_id = v_adviser_id 
+                    AND role_id = v_role_id
+                ) THEN
+                    SIGNAL SQLSTATE '45000' 
+                    SET MESSAGE_TEXT = 'Organization adviser must have Adviser role';
+                END IF;
+                
+                SET v_approver_id = v_adviser_id;
+            ELSE
+                -- Find approver based on role and program
+                IF v_step = 2 THEN
+                    -- Program Chair needs program-specific user
+                    SELECT u.user_id INTO v_approver_id
+                    FROM tbl_user u
+                    WHERE u.role_id = v_role_id
+                    AND u.program_id = v_program_id
+                    LIMIT 1;
+                ELSE
+                    -- Global roles for steps 3-5
+                    SELECT u.user_id INTO v_approver_id
+                    FROM tbl_user u
+                    WHERE u.role_id = v_role_id
+                    LIMIT 1;
+                END IF;
+                
+                IF v_approver_id IS NULL THEN
+                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'No approver_Found';
+                END IF;
+            END IF;
+
+            -- Create approval step
+            INSERT INTO tbl_approval_process (
+                organization_id,
+                period_id,
+                approver_id,
+                approval_role_id,
+                application_type,
+                status,
+                step
+            )
+            SELECT 
+                v_org_id,
+                a.period_id,
+                v_approver_id,
+                v_role_id,
+                a.application_type,
+                'Pending',
+                v_step
+            FROM tbl_application a
+            WHERE a.application_id = p_application_id;
+            
+            SET v_step = v_step + 1;
+        END;
+    END WHILE;
+
+    -- Update application status
+    UPDATE tbl_application 
+    SET status = 'pending'
+    WHERE application_id = p_application_id;
+END$$
+DELIMITER ;
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE CreateOrganizationApplication(
@@ -1524,7 +1638,7 @@ BEGIN
     SET v_logo_filename = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_logo'));
     SET v_sanitized_name = LOWER(REPLACE(v_org_name, ' ', '-'));
 
-    -- Process executives
+    -- First pass: Create users and identify president
     SET i = 0;
     WHILE i < JSON_LENGTH(p_executives) DO
         BEGIN
@@ -1532,7 +1646,6 @@ BEGIN
             DECLARE v_lname VARCHAR(50);
             DECLARE v_role VARCHAR(100);
             DECLARE v_email VARCHAR(100);
-            DECLARE v_exec_role_id INT;
             
             SET v_fname = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].f_name')));
             SET v_lname = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].l_name')));
@@ -1549,10 +1662,6 @@ BEGIN
                 SET v_error_msg = CONCAT('Invalid rank number: ', v_rank_number);
                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_error_msg;
             END IF;
-
-            SELECT rank_id INTO v_rank_id 
-            FROM tbl_executive_rank 
-            WHERE rank_level = v_rank_number;
 
             -- Check/create user
             INSERT IGNORE INTO tbl_user (
@@ -1573,14 +1682,54 @@ BEGIN
                 'Pending'
             );
 
-            -- Set president if rank is highest (5)
+            -- Identify president
             IF v_rank_number = 5 THEN
                 IF v_president_id IS NOT NULL THEN
-                    SET v_error_msg = 'Organization can only have one member with rank 5 (president equivalent)';
+                    SET v_error_msg = 'Multiple presidents detected (multiple rank 5 entries)';
                     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_error_msg;
                 END IF;
                 SET v_president_id = v_email;
             END IF;
+
+            SET i = i + 1;
+        END;
+    END WHILE;
+
+    -- Validate president exists
+    IF v_president_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Organization must have one member with rank 5 (president equivalent)';
+    END IF;
+
+    -- Create renewal cycle after users exist
+    INSERT INTO tbl_renewal_cycle (
+        organization_id,
+        cycle_number,
+        president_id
+    ) VALUES (
+        v_organization_id,
+        1,
+        v_president_id
+    );
+
+    -- Second pass: Create executive roles
+    SET i = 0;
+    WHILE i < JSON_LENGTH(p_executives) DO
+        BEGIN
+            DECLARE v_fname VARCHAR(50);
+            DECLARE v_lname VARCHAR(50);
+            DECLARE v_role VARCHAR(100);
+            DECLARE v_email VARCHAR(100);
+            DECLARE v_exec_role_id INT;
+            
+            SET v_fname = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].f_name')));
+            SET v_lname = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].l_name')));
+            SET v_role = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].role_name')));
+            SET v_email = JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].nu_email')));
+            SET v_rank_number = CAST(JSON_UNQUOTE(JSON_EXTRACT(p_executives, CONCAT('$[', i, '].rank_number'))) AS UNSIGNED);
+
+            SELECT rank_id INTO v_rank_id 
+            FROM tbl_executive_rank 
+            WHERE rank_level = v_rank_number;
 
             -- Create executive role
             INSERT INTO tbl_executive_role (
@@ -1615,22 +1764,6 @@ BEGIN
         END;
     END WHILE;
 
-    -- Validate president exists (must have exactly one rank 5)
-    IF v_president_id IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Organization must have one member with rank 5 (president equivalent)';
-    END IF;
-
-    -- Create renewal cycle
-    INSERT INTO tbl_renewal_cycle (
-        organization_id,
-        cycle_number,
-        president_id
-    ) VALUES (
-        v_organization_id,
-        1,
-        v_president_id
-    );
-
     -- Get active application period
     SELECT period_id INTO v_period_id 
     FROM tbl_application_period 
@@ -1656,11 +1789,12 @@ BEGIN
         'new',
         v_period_id,
         p_user_id,
-        'submitted'
+        'pending'
     );
 
     SET v_application_id = LAST_INSERT_ID();
 
+    CALL InitiateApprovalProcess(v_application_id);
     -- Handle requirements
     SET v_requirement_count = JSON_LENGTH(p_requirements);
     SET i = 0;
@@ -1824,12 +1958,14 @@ END $$
 DELIMITER ;
 
 -- SAMPLE DATAS
-INSERT INTO tbl_role(role_name)
-VALUES("STUDENT"), 
-("ADVISER"),
-("PROGRAMCHAIR"),
-("SDAO"),
-("DEAN");
+INSERT INTO tbl_role(role_name, is_approver, hierarchy_order)
+VALUES("STUDENT",0,null), 
+("ADVISER",1,1),
+("PROGRAMCHAIR",1,2),
+("SDAO",1,5),
+("DEAN",1,3),
+("ACADEMICDIRECTOR",1,4);
+
 
 INSERT INTO tbl_permission(permission_name)
 VALUES("CREATE_EVENT"),
@@ -1878,33 +2014,31 @@ INSERT INTO tbl_program (name, description) VALUES
 ("Bachelor of Science in Computer Science", "BSCS");
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
-("900f929ec408cb4d","Benz","Jav","benz@gmail.com", 1, 2), 
 ("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 1),
-("86533891asdvf","Test", "test", "test@gmail.com", 1, 1),
 ("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", 1, 1),
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", null, 4),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
 ("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
 
-INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
-("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
-("900f929ec408cb4d", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+-- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+-- ("900f929ec408cb4d", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+-- ("900f929ec408cb4d", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
-INSERT INTO tbl_event (
-  event_id, title, description, date, start_time, end_time, capacity,
-  certificate, fee, is_open_to_all, organization_id, status, type, user_id,
-  venue, created_at
-) VALUES
-(1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
+-- INSERT INTO tbl_event (
+--   event_id, title, description, date, start_time, end_time, capacity,
+--   certificate, fee, is_open_to_all, organization_id, status, type, user_id,
+--   venue, created_at
+-- ) VALUES
+-- (1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
 
-(1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
+-- (1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
 
-(1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
+-- (1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
 
-(1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
+-- (1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
 
-(1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
+-- (1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
 
 -- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
 -- (2,"President");
