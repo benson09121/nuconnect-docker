@@ -5,4 +5,5 @@ const middleware = require('../../middlewares/middleWare');
 
 // router.get('/organizations', middleware.validateAzureJWT, middleware.hasPermission("VIEW_ORGANIZATION"), organizationsController.getOrganizations);
 router.post('/organizations', middleware.validateAzureJWT, organizationsController.createOrganizationApplication);
+router.get('/getSpecificApplication', middleware.validateAzureJWT, organizationsController.getSpecificApplication);
 module.exports = router;
