@@ -472,6 +472,33 @@ CREATE TABLE tbl_logs (
 );
 
 
+CREATE TABLE tbl_transaction(
+    transaction_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(200) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    transaction_type ENUM('Membership Fee', 'Event Fee', 'Event Expenses') NOT NULL,
+    status ENUM('Pending', 'Completed', 'Failed') DEFAULT 'Pending',
+    proof_image VARCHAR(255) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
+);
+
+CREATE TABLE tbl_transaction_membership(
+    transaction_id INT PRIMARY KEY,
+    organization_id INT NOT NULL,
+    cycle_number INT NOT NULL,
+    FOREIGN KEY (transaction_id) REFERENCES tbl_transaction(transaction_id) ON DELETE CASCADE,
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
+);
+
+CREATE TABLE tbl_transaction_event(
+    transaction_id INT PRIMARY KEY,
+    event_id INT NOT NULL,
+    FOREIGN KEY (transaction_id) REFERENCES tbl_transaction(transaction_id) ON DELETE CASCADE,
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE
+);
+
+
 -- PROCEDURES
 use db_nuconnect;
 
@@ -508,7 +535,8 @@ BEGIN
         e.venue,
         e.start_time,
         e.end_time,
-        e.date,
+        e.start_date,
+        e.end_date,
         e.created_at,
         e.status,
         e.type,
@@ -519,7 +547,7 @@ BEGIN
         COALESCE(e.fee, 0) AS event_fee,
         e.capacity,
         CASE 
-            WHEN TIMESTAMP(e.date, e.end_time) < CURRENT_TIMESTAMP THEN 'Ended'
+            WHEN TIMESTAMP(e.end_date, e.end_time) < CURRENT_TIMESTAMP THEN 'Ended'
             ELSE 'Upcoming'
         END AS event_status,
         e.certificate AS certificate_available
@@ -539,10 +567,10 @@ BEGIN
       )
     ORDER BY 
         CASE 
-            WHEN TIMESTAMP(e.date, e.end_time) < CURRENT_TIMESTAMP THEN 1 
+            WHEN TIMESTAMP(e.end_date, e.end_time) < CURRENT_TIMESTAMP THEN 1 
             ELSE 0 
         END,
-        e.date ASC,
+        e.start_date ASC,
         e.start_time ASC;
 END $$
 DELIMITER ;
@@ -571,7 +599,8 @@ a.start_time,
 a.end_time, 
 a.status, 
 a.type, 
-a.date, 
+a.start_date,
+a.end_date,
 COALESCE(b.status, "Not Registered") as student_status
 FROM tbl_event a
 LEFT JOIN tbl_event_attendance b ON a.event_id = b.event_id AND b.user_id = userId
@@ -599,7 +628,8 @@ CREATE DEFINER='admin'@'%' PROCEDURE CreateEvent(IN
     p_title VARCHAR(300),
     p_description TEXT,
     p_venue VARCHAR(200),
-    p_date DATE,
+    p_start_date DATE,
+    p_end_date DATE,
     p_start_time TIME,
     p_end_time TIME,
     p_organization_id INT,
@@ -635,11 +665,12 @@ BEGIN
         title,
         description,
         venue,
+        start_date,
+        end_date,
         start_time,
         end_time,
         status,
         type,
-        date,
         is_open_to_all
     ) VALUES (
         p_organization_id,
@@ -647,11 +678,12 @@ BEGIN
         p_title,
         p_description,
         p_venue,
+        p_start_date,
+        p_end_date,
         p_start_time,
         p_end_time,
         p_status,
         p_type,
-        p_date,
         p_is_open_to_all
     );
     
@@ -707,7 +739,8 @@ BEGIN
         ea.attendance_id,
         e.event_id,
         e.title,
-        e.date,
+        e.start_date,
+        e.end_date,
         e.start_time,
         e.venue,
         o.name AS organization_name,
@@ -717,7 +750,7 @@ BEGIN
     INNER JOIN tbl_event e ON ea.event_id = e.event_id
     INNER JOIN tbl_organization o ON e.organization_id = o.organization_id
     WHERE (ea.user_id = p_user_id) AND (ea.status = "Registered" OR ea.status = "Attended")
-    ORDER BY e.date DESC, e.start_time DESC;
+    ORDER BY e.start_date DESC, e.start_time DESC;
 END $$
 DELIMITER ;
 
@@ -779,7 +812,8 @@ BEGIN
         END AS has_joined,
         (
             SELECT JSON_ARRAYAGG(JSON_OBJECT(
-                'event_date', e.date,
+                'event_start_date', e.start_date,
+                'event_end_date', e.end_date,
                 'event_title', e.title,
                 'start_time', e.start_time,
                 'end_time', e.end_time,
@@ -805,8 +839,8 @@ BEGIN
             FROM tbl_event e
             WHERE e.organization_id = o.organization_id
             AND e.status = 'Approved'
-            AND e.date >= CURDATE()
-            ORDER BY e.date ASC
+            AND e.start_date >= CURDATE()
+            ORDER BY e.start_date ASC
             LIMIT 5
         ) AS upcoming_events,
         (
@@ -844,7 +878,8 @@ BEGIN
     SELECT 
         e.event_id,
         e.title AS event_title,
-        e.date,
+        e.start_date,
+        e.end_date,
         e.start_time,
         e.end_time,
         e.venue,
@@ -872,12 +907,12 @@ BEGIN
     JOIN tbl_organization o ON e.organization_id = o.organization_id
     LEFT JOIN UserOrganizations uo ON e.organization_id = uo.organization_id
     WHERE e.status = 'Approved'
-      AND e.date >= CURDATE()
+      AND e.start_date >= CURDATE()
       AND (
           e.is_open_to_all = TRUE
           OR uo.organization_id IS NOT NULL
       )
-    ORDER BY e.date ASC, e.start_time ASC
+    ORDER BY e.start_date ASC, e.start_time ASC
     LIMIT 5;
 END $$
 DELIMITER ;
@@ -2116,6 +2151,8 @@ BEGIN
         e.description,
         e.start_date,
         e.end_date,
+        e.start_date,
+        e.end_date,
         e.start_time,
         e.end_time,
         e.capacity,
@@ -2136,27 +2173,6 @@ BEGIN
 END $$
 
 DELIMITER ;
-
-    -- Get logs
-DELIMITER $$
-
-CREATE DEFINER='admin'@'%' PROCEDURE GetLogs()
-BEGIN
-    SELECT 
-        log_id,
-        user_id,
-        timestamp,
-        action,
-        redirect_url,
-        file_path,
-        meta_data,
-        type
-    FROM tbl_logs
-    ORDER BY timestamp DESC;
-END $$
-
-DELIMITER ;
-
 
 -- INDEXES
 
