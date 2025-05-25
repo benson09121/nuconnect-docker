@@ -39,6 +39,21 @@ async function getEventById(req, res) {
     }
 }
 
+async function getAttendeesbyEventId(req, res) {
+    try {
+        const event_id = req.params.id;
+        const attendees = await eventModel.getAttendeesByEventId(event_id);
+        if (attendees.length === 0) {
+            return res.status(404).json({ message: 'No attendees found for this event' });
+        }
+        res.status(200).json(attendees);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching attendees for the event.",
+        });
+    }
+}
+
 async function getEventsByStatus(req, res) {
     try {
         const status = req.params.status;
@@ -50,6 +65,20 @@ async function getEventsByStatus(req, res) {
     } catch (error) {
         res.status(500).json({
             error: error.message || "An error occurred while fetching events by status.",
+        });
+    }
+}
+
+async function getPastEvents(req, res) {
+    try {
+        const events = await eventModel.getPastEvents();
+        console.log('Past events from DB:', events); // Add this log
+        res.status(200).json(events || []); // Ensure array is always returned
+    } catch (error) {
+        console.error('Error in getPastEvents:', error);
+        res.status(500).json({
+            error: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 }
@@ -89,7 +118,9 @@ module.exports = {
     addEvent,
     getEvents,
     getEventById,
+    getPastEvents,
+    getAttendeesbyEventId,
     updateEvent,
     deleteEvent,
-    getEventsByStatus
+    getEventsByStatus,
 };

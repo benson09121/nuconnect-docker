@@ -40,11 +40,35 @@ async function getEventById(event_id) {
     }
 }
 
+async function getAttendeesByEventId(event_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetEventAttendeesWithDetails(?);', [event_id]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
 async function getEventsByStatus(status) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetEventsByStatus(?);', [status]);
         return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
+async function getPastEvents() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetPastEvents();');
+        console.log('Raw DB results:', rows); 
+        return rows[0] || []; 
+    } catch (error) {
+        console.error('DB Error in getPastEvents:', error);
+        throw error;
     } finally {
         connection.release();
     }
@@ -84,6 +108,8 @@ module.exports = {
     addEvent,
     getEvents,
     getEventById,
+    getPastEvents,
+    getAttendeesByEventId,
     updateEvent,
     deleteEvent,
     getEventsByStatus

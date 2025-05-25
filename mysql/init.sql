@@ -259,15 +259,18 @@ CREATE TABLE tbl_event_course(
     FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
 );
 
-CREATE TABLE tbl_event_attendance(
-		attendance_id INT AUTO_INCREMENT PRIMARY KEY,
-		event_id INT NOT NULL,
-		user_id VARCHAR(200) NOT NULL,
-		status ENUM('Registered', 'Not Registered','Attended') NOT NULL,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
-		FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
+CREATE TABLE tbl_event_attendance (
+    attendance_id INT AUTO_INCREMENT PRIMARY KEY,
+    event_id INT NOT NULL,
+    user_id VARCHAR(200) NOT NULL,
+    status ENUM('Pending', 'Registered', 'Evaluated', 'Attended') NOT NULL,
+    time_in DATETIME DEFAULT NULL,
+    time_out DATETIME DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
+
 
 CREATE TABLE tbl_certificate_template (
     template_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -494,6 +497,7 @@ CREATE TABLE tbl_transaction_membership(
 CREATE TABLE tbl_transaction_event(
     transaction_id INT PRIMARY KEY,
     event_id INT NOT NULL,
+    remarks VARCHAR(255) DEFAULT NULL,
     FOREIGN KEY (transaction_id) REFERENCES tbl_transaction(transaction_id) ON DELETE CASCADE,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE
 );
@@ -2140,6 +2144,40 @@ END $$
 
 DELIMITER ;
 
+    -- Get attendees per event
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventAttendeesWithDetails(
+    IN p_event_id INT
+)
+BEGIN
+    SELECT
+        ea.attendance_id,
+        ea.event_id,
+        ea.user_id,
+        CONCAT(u.f_name, ' ', u.l_name) AS full_name,
+        u.email,
+        u.profile_picture,
+        ea.status AS attendance_status,
+        te.remarks,
+        ea.time_in,
+        ea.time_out,
+        ea.created_at AS registration_date,
+        t.transaction_id,
+        t.amount,
+        t.transaction_type,
+        t.status AS transaction_status,
+        t.proof_image,
+        t.created_at AS transaction_created_at
+    FROM tbl_event_attendance ea
+    LEFT JOIN tbl_user u ON ea.user_id = u.user_id
+    LEFT JOIN tbl_transaction_event te ON ea.event_id = te.event_id AND ea.user_id = (SELECT user_id FROM tbl_transaction WHERE transaction_id = te.transaction_id LIMIT 1)
+    LEFT JOIN tbl_transaction t ON te.transaction_id = t.transaction_id
+    WHERE ea.event_id = p_event_id;
+END $$
+
+DELIMITER ;
+
     -- Get event by status
 DELIMITER $$
 
@@ -2172,6 +2210,41 @@ BEGIN
     WHERE e.status = p_status;
 END $$
 
+DELIMITER ;
+
+    -- Get past events
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetPastEvents()
+BEGIN
+    SELECT 
+        e.event_id,
+        e.title,
+        e.description,
+        e.start_date,
+        e.end_date,
+        e.start_time,
+        e.end_time,
+        e.capacity,
+        e.certificate,
+        e.fee,
+        e.is_open_to,
+        e.venue_type,
+        e.venue,
+        e.organization_id,
+        o.name AS organization_name,
+        e.status,
+        e.type,
+        e.user_id,
+        e.created_at
+    FROM tbl_event e
+    JOIN tbl_organization o ON e.organization_id = o.organization_id
+    WHERE e.status = 'Approved'
+      AND (
+        (e.end_date IS NOT NULL AND e.end_date < CURDATE()) OR
+        (e.end_date IS NULL AND e.start_date < CURDATE())
+      )
+    ORDER BY e.end_date DESC, e.start_date DESC;
+END $$
 DELIMITER ;
 
 -- INDEXES
@@ -2299,7 +2372,13 @@ INSERT INTO tbl_event (
 
 (1004, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Earth Hour Rally', 'Tree planting and cleanup event', 'Face to face', 'Community Park', '2025-06-15', '2025-06-15', '06:30:00', '10:30:00', 'Approved', 'Free', 'Open to all', 0, 150, '2025-05-15 09:00:00', 'Eco Warrior Badge'),
 
-(1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Archived', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate');
+(1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Rejected', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate'),
+
+(2001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Tech Expo', 'Annual technology exposition', 'Face to face', 'NU Convention Center', '2023-03-10', '2023-03-10', '08:00:00', '17:00:00', 'Approved', 'Free', 'Open to all', 0, 500, '2023-02-01 09:00:00', 'Certificate of Participation'),
+
+(2002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Coding Bootcamp', 'Intensive coding bootcamp for beginners', 'Face to face', 'Lab 202', '2023-04-15', '2023-04-17', '09:00:00', '16:00:00', 'Approved', 'Paid', 'Members only', 100, 50, '2023-03-10 10:00:00', 'Certificate of Completion'),
+
+(2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
 
 -- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
 -- (2,"President");
@@ -2378,6 +2457,43 @@ VALUES
 ('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
 ('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
 ('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
+
+-- Insert 20 sample attendance records matching your users and events
+INSERT INTO tbl_event_attendance (event_id, user_id, status, time_in, time_out) VALUES
+-- For Innovation Pitch Fest (event_id 1001)
+(1001, '900f929ec408cb4', 'Attended', '2025-06-10 08:55:23', '2025-06-10 15:05:45'),
+(1001, '5fb95ed0a0d20daf', 'Evaluated', '2025-06-10 09:10:12', '2025-06-10 15:00:30'),
+(1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Pending', '2025-06-10 09:30:00', NULL),
+
+-- For Groove Jam 2025 (event_id 1002)
+(1002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Registered', NULL, NULL),
+(1002, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Pending', NULL, NULL),
+
+-- For Hack-It-Out (event_id 1003)
+(1003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
+(1003, '900f929ec408cb4', 'Registered', NULL, NULL),
+
+-- For Earth Hour Rally (event_id 1004)
+(1004, '5fb95ed0a0d20daf', 'Attended', '2025-06-15 06:25:00', '2025-06-15 10:35:00'),
+(1004, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2025-06-15 06:40:00', '2025-06-15 10:20:00'),
+(1004, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2025-06-15 07:00:00', NULL),
+
+-- For E-Sports Showdown (event_id 1005)
+(1005, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
+(1005, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
+
+-- For 2023 Tech Expo (event_id 2001)
+(2001, '900f929ec408cb4', 'Attended', '2023-03-10 07:45:00', '2023-03-10 17:15:00'),
+(2001, '5fb95ed0a0d20daf', 'Attended', '2023-03-10 08:10:00', '2023-03-10 16:50:00'),
+
+-- For 2023 Coding Bootcamp (event_id 2002)
+(2002, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2023-04-15 08:30:00', '2023-04-17 16:00:00'),
+(2002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2023-04-15 09:00:00', NULL),
+
+-- For 2023 Summer Seminar (event_id 2003)
+(2003, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
+(2003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
+(2003, '900f929ec408cb4', 'Attended', '2023-05-05 09:45:00', '2023-05-05 12:15:00');
 
 -- INSERT INTO tbl_logs (
 --     user_id,
