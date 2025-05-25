@@ -114,6 +114,77 @@ async function deleteEvent(req, res) {
     }
 }
 
+async function approvePaidEventRegistration(req, res) {
+  try {
+    const { event_id, user_id, approver_email } = req.params;
+    const { remarks } = req.body; // remarks is optional
+
+    if (!approver_email) {
+      return res.status(400).json({ message: "Approver email is required." });
+    }
+
+    // Lookup user_id from email
+    const approver = await eventModel.getUserByEmail(approver_email);
+    if (!approver) {
+      return res.status(404).json({ message: "Approver not found." });
+    }
+
+    const result = await eventModel.approvePaidEventRegistration(
+      event_id,
+      user_id,
+      approver.user_id,
+      remarks 
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Registration not found or already approved' });
+    }
+
+    res.status(200).json({ message: 'Registration approved successfully' });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while approving the registration.",
+    });
+  }
+}
+
+async function rejectPaidEventRegistration(req, res) {
+  try {
+    const { event_id, user_id, approver_email } = req.params;
+    const { remarks } = req.body;
+
+    if (!approver_email) {
+      return res.status(400).json({ message: "Approver email is required." });
+    }
+    if (!remarks) {
+      return res.status(400).json({ message: "Remarks are required." });
+    }
+
+    // Lookup user_id from email
+    const approver = await eventModel.getUserByEmail(approver_email);
+    if (!approver) {
+      return res.status(404).json({ message: "Approver not found." });
+    }
+
+    const result = await eventModel.rejectPaidEventRegistration(
+      event_id,
+      user_id,
+      approver.user_id, // pass the user_id to the stored procedure
+      remarks
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Registration not found or already rejected' });
+    }
+
+    res.status(200).json({ message: 'Registration rejected successfully' });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while rejecting the registration.",
+    });
+  }
+}
+
 module.exports = {
     addEvent,
     getEvents,
@@ -123,4 +194,6 @@ module.exports = {
     updateEvent,
     deleteEvent,
     getEventsByStatus,
+    approvePaidEventRegistration,
+    rejectPaidEventRegistration
 };

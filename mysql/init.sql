@@ -263,14 +263,14 @@ CREATE TABLE tbl_event_attendance (
     attendance_id INT AUTO_INCREMENT PRIMARY KEY,
     event_id INT NOT NULL,
     user_id VARCHAR(200) NOT NULL,
-    status ENUM('Pending', 'Registered', 'Evaluated', 'Attended') NOT NULL,
+    status ENUM('Pending', 'Registered', 'Evaluated', 'Attended', 'Rejected') NOT NULL,
     time_in DATETIME DEFAULT NULL,
     time_out DATETIME DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME DEFAULT NULL,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
-
 
 CREATE TABLE tbl_certificate_template (
     template_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -2247,6 +2247,138 @@ BEGIN
 END $$
 DELIMITER ;
 
+DELIMITER $$
+
+-- Procedure to approve attendance and transaction
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE ApprovePaidEventRegistration(
+    IN p_event_id INT,
+    IN p_user_id VARCHAR(200),
+    IN p_approver_id VARCHAR(200),
+    IN p_remarks VARCHAR(255) -- optional, can be NULL
+)
+BEGIN
+    DECLARE v_attendance_id INT;
+    DECLARE v_transaction_id INT;
+    DECLARE v_final_remarks VARCHAR(255);
+
+    -- Set remarks to 'No Remarks' if NULL or empty
+    IF p_remarks IS NULL OR LENGTH(TRIM(p_remarks)) = 0 THEN
+        SET v_final_remarks = 'No Remarks';
+    ELSE
+        SET v_final_remarks = p_remarks;
+    END IF;
+
+    -- Find the attendance record
+    SELECT attendance_id INTO v_attendance_id
+    FROM tbl_event_attendance
+    WHERE event_id = p_event_id AND user_id = p_user_id
+    LIMIT 1;
+
+    IF v_attendance_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No registration found for this event and user';
+    END IF;
+
+    -- Get transaction ID if exists
+    SELECT te.transaction_id INTO v_transaction_id
+    FROM tbl_transaction_event te
+    JOIN tbl_transaction t ON te.transaction_id = t.transaction_id
+    WHERE te.event_id = p_event_id AND t.user_id = p_user_id
+    LIMIT 1;
+
+    -- Update attendance status
+    UPDATE tbl_event_attendance
+    SET status = 'Registered'
+    WHERE attendance_id = v_attendance_id;
+
+    -- Update transaction status and remarks if exists
+    IF v_transaction_id IS NOT NULL THEN
+        UPDATE tbl_transaction
+        SET status = 'Completed'
+        WHERE transaction_id = v_transaction_id;
+
+        UPDATE tbl_transaction_event
+        SET remarks = CONCAT('Approved: ', v_final_remarks)
+        WHERE transaction_id = v_transaction_id;
+    END IF;
+
+    -- Log the approval
+    INSERT INTO tbl_logs (user_id, action, redirect_url, type)
+    VALUES (
+        p_approver_id, 
+        CONCAT('Approved registration for event ', p_event_id), 
+        CONCAT('/event-attendance/', p_event_id), 
+        'Attendance Approval'
+    );
+
+    SELECT 'Attendance approved successfully' AS message;
+END $$
+
+DELIMITER ;
+
+     -- Reject Registration
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE RejectPaidEventRegistration(
+    IN p_event_id INT,
+    IN p_user_id VARCHAR(200),
+    IN p_approver_id VARCHAR(200),
+    IN p_reason VARCHAR(255)
+)
+BEGIN
+    DECLARE v_attendance_id INT;
+    DECLARE v_transaction_id INT;
+
+    -- Find the attendance record
+    SELECT attendance_id INTO v_attendance_id
+    FROM tbl_event_attendance
+    WHERE event_id = p_event_id AND user_id = p_user_id AND deleted_at IS NULL
+    LIMIT 1;
+
+    IF v_attendance_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No registration found for this event and user';
+    END IF;
+
+    -- Get transaction ID if exists
+    SELECT te.transaction_id INTO v_transaction_id
+    FROM tbl_transaction_event te
+    JOIN tbl_transaction t ON te.transaction_id = t.transaction_id
+    WHERE te.event_id = p_event_id AND t.user_id = p_user_id
+    LIMIT 1;
+
+    -- Soft-delete attendance using deleted_at
+    UPDATE tbl_event_attendance
+    SET deleted_at = NOW(), status = 'Rejected'
+    WHERE attendance_id = v_attendance_id;
+
+    -- Update transaction status and remarks if exists
+    IF v_transaction_id IS NOT NULL THEN
+        UPDATE tbl_transaction
+        SET status = 'Failed'
+        WHERE transaction_id = v_transaction_id;
+
+        UPDATE tbl_transaction_event
+        SET remarks = CONCAT('Rejected: ', p_reason)
+        WHERE transaction_id = v_transaction_id;
+    END IF;
+
+    -- Log the rejection
+    INSERT INTO tbl_logs (user_id, action, meta_data, type)
+    VALUES (
+        p_approver_id, 
+        CONCAT('Rejected registration for event ', p_event_id), 
+        JSON_OBJECT('user_id', p_user_id, 'reason', p_reason),
+        'Attendance Rejection'
+    );
+
+    SELECT 'Attendance rejected and soft-deleted successfully' AS message;
+END $$
+
+DELIMITER ;
+
 -- INDEXES
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
@@ -2310,7 +2442,8 @@ VALUES("CREATE_EVENT"),
 ("DELETE_EVALUATION"),
 ("VIEW_EVALUATION"),
 ("VIEW_LOGS"),
-("WEB_ACCESS");
+("WEB_ACCESS"),
+("MANAGE_REGISTRATION");
 
 INSERT INTO tbl_role_permission (role_id, permission_id) 
 VALUES
@@ -2325,7 +2458,8 @@ VALUES
 (4,23),
 (2,6),
 (2,9),
-(2,23);
+(2,23),
+(4,24);
 
 
 INSERT INTO tbl_program (name, description) VALUES 
@@ -2494,6 +2628,141 @@ INSERT INTO tbl_event_attendance (event_id, user_id, status, time_in, time_out) 
 (2003, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
 (2003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
 (2003, '900f929ec408cb4', 'Attended', '2023-05-05 09:45:00', '2023-05-05 12:15:00');
+
+-- Insert test event
+INSERT INTO tbl_event (
+  event_id, organization_id, user_id, title, 
+  description, venue_type, venue, start_date, 
+  end_date, start_time, end_time, status, 
+  type, is_open_to, fee, capacity, created_at
+) VALUES (
+  9998, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
+  'Tech Conference 2023', 'Annual technology conference', 
+  'Face to face', 'NU Convention Center', '2023-11-15', 
+  '2023-11-17', '08:00:00', '18:00:00', 
+  'Approved', 'Paid', 'Open to all', 500, 200, NOW()
+);
+
+-- Attendee 1: Pending approval with transaction
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
+  500, 'Event Fee', 'Pending', 'payment_proof1.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Early bird registration'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
+  'Pending', NOW()
+);
+
+-- Attendee 2: Pending approval with unclear payment
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
+  500, 'Event Fee', 'Pending', 'unclear_payment.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Payment unclear - needs verification'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
+  'Pending', NOW()
+);
+
+-- Attendee 3: Approved registration
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 
+  500, 'Event Fee', 'Completed', 'clear_payment.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Payment verified - approved'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 
+  'Registered', NOW()
+);
+
+-- Attendee 4: Rejected registration
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
+  500, 'Event Fee', 'Failed', 'invalid_payment.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Payment failed verification - rejected'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
+  'Evaluated', NOW()
+);
+
+-- Attendee 5: Pending approval with no transaction yet (free event scenario)
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, '5fb95ed0a0d20daf', 
+  'Pending', NOW()
+);
+
+-- Attendee 6: Approved for free event
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, '900f929ec408cb4', 
+  'Registered', NOW()
+);
+
+-- Attendee 7: Attended the event
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
+  500, 'Event Fee', 'Completed', 'attended_payment.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Attended all days'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, time_in, time_out, created_at
+) VALUES (
+  9998, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
+  'Attended', '2023-11-15 08:05:23', '2023-11-17 17:30:45', NOW()
+);
 
 -- INSERT INTO tbl_logs (
 --     user_id,
