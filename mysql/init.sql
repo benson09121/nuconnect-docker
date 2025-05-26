@@ -361,14 +361,17 @@ CREATE TABLE tbl_event_course(
     FOREIGN KEY (program_id) REFERENCES tbl_program(program_id)
 );
 
-CREATE TABLE tbl_event_attendance(
-		attendance_id INT AUTO_INCREMENT PRIMARY KEY,
-		event_id INT NOT NULL,
-		user_id VARCHAR(200) NOT NULL,
-		status ENUM('Registered', 'Not Registered','Attended') NOT NULL,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
-		FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
+CREATE TABLE tbl_event_attendance (
+    attendance_id INT AUTO_INCREMENT PRIMARY KEY,
+    event_id INT NOT NULL,
+    user_id VARCHAR(200) NOT NULL,
+    status ENUM('Pending', 'Registered', 'Evaluated', 'Attended', 'Rejected') NOT NULL,
+    time_in DATETIME DEFAULT NULL,
+    time_out DATETIME DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME DEFAULT NULL,
+    FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
 CREATE TABLE tbl_certificate_template (
@@ -596,6 +599,7 @@ CREATE TABLE tbl_transaction_membership(
 CREATE TABLE tbl_transaction_event(
     transaction_id INT PRIMARY KEY,
     event_id INT NOT NULL,
+    remarks VARCHAR(255) DEFAULT NULL,
     FOREIGN KEY (transaction_id) REFERENCES tbl_transaction(transaction_id) ON DELETE CASCADE,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE
 );
@@ -2212,13 +2216,14 @@ BEGIN
         e.capacity,
         e.certificate,
         e.fee,
-        e.is_open_to_all,
+        e.is_open_to,
+        e.venue_type,
+        e.venue,
         e.organization_id,
         o.name AS organization_name,
         e.status,
         e.type,
         e.user_id,
-        e.venue,
         e.created_at
     FROM tbl_event e
     JOIN tbl_organization o ON e.organization_id = o.organization_id;
@@ -2242,17 +2247,52 @@ BEGIN
         e.capacity,
         e.certificate,
         e.fee,
-        e.is_open_to_all,
+        e.is_open_to,
+        e.venue_type,
+        e.venue,
         e.organization_id,
         o.name AS organization_name,
         e.status,
         e.type,
         e.user_id,
-        e.venue,
         e.created_at
     FROM tbl_event e
     JOIN tbl_organization o ON e.organization_id = o.organization_id
     WHERE e.event_id = p_event_id;
+END $$
+
+DELIMITER ;
+
+    -- Get attendees per event
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventAttendeesWithDetails(
+    IN p_event_id INT
+)
+BEGIN
+    SELECT
+        ea.attendance_id,
+        ea.event_id,
+        ea.user_id,
+        CONCAT(u.f_name, ' ', u.l_name) AS full_name,
+        u.email,
+        u.profile_picture,
+        ea.status AS attendance_status,
+        te.remarks,
+        ea.time_in,
+        ea.time_out,
+        ea.created_at AS registration_date,
+        t.transaction_id,
+        t.amount,
+        t.transaction_type,
+        t.status AS transaction_status,
+        t.proof_image,
+        t.created_at AS transaction_created_at
+    FROM tbl_event_attendance ea
+    LEFT JOIN tbl_user u ON ea.user_id = u.user_id
+    LEFT JOIN tbl_transaction_event te ON ea.event_id = te.event_id AND ea.user_id = (SELECT user_id FROM tbl_transaction WHERE transaction_id = te.transaction_id LIMIT 1)
+    LEFT JOIN tbl_transaction t ON te.transaction_id = t.transaction_id
+    WHERE ea.event_id = p_event_id;
 END $$
 
 DELIMITER ;
@@ -2268,18 +2308,21 @@ BEGIN
         e.description,
         e.start_date,
         e.end_date,
+        e.start_date,
+        e.end_date,
         e.start_time,
         e.end_time,
         e.capacity,
         e.certificate,
         e.fee,
-        e.is_open_to_all,
+        e.is_open_to,
+        e.venue_type,
+        e.venue,
         e.organization_id,
         o.name AS organization_name,
         e.status,
         e.type,
         e.user_id,
-        e.venue,
         e.created_at
     FROM tbl_event e
     JOIN tbl_organization o ON e.organization_id = o.organization_id
@@ -2287,6 +2330,7 @@ BEGIN
 END $$
 
 DELIMITER ;
+
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetSpecificApplication(
@@ -2493,7 +2537,172 @@ BEGIN
 END$$
 DELIMITER ;
 
+    -- Get past events
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetPastEvents()
+BEGIN
+    SELECT 
+        e.event_id,
+        e.title,
+        e.description,
+        e.start_date,
+        e.end_date,
+        e.start_time,
+        e.end_time,
+        e.capacity,
+        e.certificate,
+        e.fee,
+        e.is_open_to,
+        e.venue_type,
+        e.venue,
+        e.organization_id,
+        o.name AS organization_name,
+        e.status,
+        e.type,
+        e.user_id,
+        e.created_at
+    FROM tbl_event e
+    JOIN tbl_organization o ON e.organization_id = o.organization_id
+    WHERE e.status = 'Approved'
+      AND (
+        (e.end_date IS NOT NULL AND e.end_date < CURDATE()) OR
+        (e.end_date IS NULL AND e.start_date < CURDATE())
+      )
+    ORDER BY e.end_date DESC, e.start_date DESC;
+END $$
+DELIMITER ;
 
+DELIMITER $$
+
+-- Procedure to approve attendance and transaction
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE ApprovePaidEventRegistration(
+    IN p_event_id INT,
+    IN p_user_id VARCHAR(200),
+    IN p_approver_id VARCHAR(200),
+    IN p_remarks VARCHAR(255) -- optional, can be NULL
+)
+BEGIN
+    DECLARE v_attendance_id INT;
+    DECLARE v_transaction_id INT;
+    DECLARE v_final_remarks VARCHAR(255);
+
+    -- Set remarks to 'No Remarks' if NULL or empty
+    IF p_remarks IS NULL OR LENGTH(TRIM(p_remarks)) = 0 THEN
+        SET v_final_remarks = 'No Remarks';
+    ELSE
+        SET v_final_remarks = p_remarks;
+    END IF;
+
+    -- Find the attendance record
+    SELECT attendance_id INTO v_attendance_id
+    FROM tbl_event_attendance
+    WHERE event_id = p_event_id AND user_id = p_user_id
+    LIMIT 1;
+
+    IF v_attendance_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No registration found for this event and user';
+    END IF;
+
+    -- Get transaction ID if exists
+    SELECT te.transaction_id INTO v_transaction_id
+    FROM tbl_transaction_event te
+    JOIN tbl_transaction t ON te.transaction_id = t.transaction_id
+    WHERE te.event_id = p_event_id AND t.user_id = p_user_id
+    LIMIT 1;
+
+    -- Update attendance status
+    UPDATE tbl_event_attendance
+    SET status = 'Registered'
+    WHERE attendance_id = v_attendance_id;
+
+    -- Update transaction status and remarks if exists
+    IF v_transaction_id IS NOT NULL THEN
+        UPDATE tbl_transaction
+        SET status = 'Completed'
+        WHERE transaction_id = v_transaction_id;
+
+        UPDATE tbl_transaction_event
+        SET remarks = CONCAT('Approved: ', v_final_remarks)
+        WHERE transaction_id = v_transaction_id;
+    END IF;
+
+    -- Log the approval
+    INSERT INTO tbl_logs (user_id, action, redirect_url, type)
+    VALUES (
+        p_approver_id, 
+        CONCAT('Approved registration for event ', p_event_id), 
+        CONCAT('/event-attendance/', p_event_id), 
+        'Attendance Approval'
+    );
+
+    SELECT 'Attendance approved successfully' AS message;
+END $$
+
+DELIMITER ;
+
+     -- Reject Registration
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE RejectPaidEventRegistration(
+    IN p_event_id INT,
+    IN p_user_id VARCHAR(200),
+    IN p_approver_id VARCHAR(200),
+    IN p_reason VARCHAR(255)
+)
+BEGIN
+    DECLARE v_attendance_id INT;
+    DECLARE v_transaction_id INT;
+
+    -- Find the attendance record
+    SELECT attendance_id INTO v_attendance_id
+    FROM tbl_event_attendance
+    WHERE event_id = p_event_id AND user_id = p_user_id AND deleted_at IS NULL
+    LIMIT 1;
+
+    IF v_attendance_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No registration found for this event and user';
+    END IF;
+
+    -- Get transaction ID if exists
+    SELECT te.transaction_id INTO v_transaction_id
+    FROM tbl_transaction_event te
+    JOIN tbl_transaction t ON te.transaction_id = t.transaction_id
+    WHERE te.event_id = p_event_id AND t.user_id = p_user_id
+    LIMIT 1;
+
+    -- Soft-delete attendance using deleted_at
+    UPDATE tbl_event_attendance
+    SET deleted_at = NOW(), status = 'Rejected'
+    WHERE attendance_id = v_attendance_id;
+
+    -- Update transaction status and remarks if exists
+    IF v_transaction_id IS NOT NULL THEN
+        UPDATE tbl_transaction
+        SET status = 'Failed'
+        WHERE transaction_id = v_transaction_id;
+
+        UPDATE tbl_transaction_event
+        SET remarks = CONCAT('Rejected: ', p_reason)
+        WHERE transaction_id = v_transaction_id;
+    END IF;
+
+    -- Log the rejection
+    INSERT INTO tbl_logs (user_id, action, meta_data, type)
+    VALUES (
+        p_approver_id, 
+        CONCAT('Rejected registration for event ', p_event_id), 
+        JSON_OBJECT('user_id', p_user_id, 'reason', p_reason),
+        'Attendance Rejection'
+    );
+
+    SELECT 'Attendance rejected and soft-deleted successfully' AS message;
+END $$
+
+DELIMITER ;
 
 -- INDEXES
 
@@ -2554,7 +2763,8 @@ VALUES("CREATE_EVENT"),
 ("DELETE_EVALUATION"),
 ("VIEW_EVALUATION"),
 ("VIEW_LOGS"),
-("WEB_ACCESS");
+("WEB_ACCESS"),
+("MANAGE_REGISTRATION");
 
 INSERT INTO tbl_role_permission (role_id, permission_id) 
 VALUES
@@ -2569,7 +2779,8 @@ VALUES
 (4,23),
 (2,6),
 (2,9),
-(2,23);
+(2,23),
+(4,24);
 
 
 INSERT INTO tbl_program (name, description) VALUES 
@@ -2588,20 +2799,41 @@ INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUE
 -- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
 -- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
--- INSERT INTO tbl_event (
---   event_id, title, description, date, start_time, end_time, capacity,
---   certificate, fee, is_open_to_all, organization_id, status, type, user_id,
---   venue, created_at
--- ) VALUES
--- (1001, 'Innovation Pitch Fest', 'A competition for pitching new ideas', '2025-06-10', '09:00:00', '15:00:00', 100, 'Participation Certificate', 50, 1, 1, 'Approved', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'NU Hall A', '2025-05-01 08:00:00'),
+INSERT INTO tbl_event (
+  event_id,
+  organization_id,
+  user_id,
+  title,
+  description,
+  venue_type,
+  venue,
+  start_date,
+  end_date,
+  start_time,
+  end_time,
+  status,
+  type,
+  is_open_to,
+  fee,
+  capacity,
+  created_at,
+  certificate
+) VALUES
+(1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
 
--- (1002, 'Groove Jam 2025', 'Annual inter-school dance battle', '2025-07-20', '13:00:00', '19:00:00', 300, 'Winner + Participation', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Open Grounds', '2025-05-05 10:30:00'),
+(1002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Groove Jam 2025', 'Annual inter-school dance battle', 'Face to face', 'Open Grounds', '2025-07-20', '2025-07-20', '13:00:00', '19:00:00', 'Approved', 'Free', 'Open to all', 0, 300, '2025-05-05 10:30:00', 'Winner + Participation'),
 
--- (1003, 'Hack-It-Out', '24-hour Hackathon for IT majors', '2025-08-05', '08:00:00', '08:00:00', 60, 'Certificate + Swag', 200, 0, 1, 'Pending', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Tech Lab 101', '2025-05-12 15:45:00'),
+(1003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Hack-It-Out', '24-hour Hackathon for IT majors', 'Face to face', 'Tech Lab 101', '2025-08-05', '2025-08-05', '08:00:00', '08:00:00', 'Pending', 'Paid', 'Members only', 200, 60, '2025-05-12 15:45:00', 'Certificate + Swag'),
 
--- (1004, 'Earth Hour Rally', 'Tree planting and cleanup event', '2025-06-15', '06:30:00', '10:30:00', 150, 'Eco Warrior Badge', 0, 1, 2, 'Approved', 'Free', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Community Park', '2025-05-15 09:00:00'),
+(1004, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Earth Hour Rally', 'Tree planting and cleanup event', 'Face to face', 'Community Park', '2025-06-15', '2025-06-15', '06:30:00', '10:30:00', 'Approved', 'Free', 'Open to all', 0, 150, '2025-05-15 09:00:00', 'Eco Warrior Badge'),
 
--- (1005, 'E-Sports Showdown', 'Inter-university e-sports competition', '2025-07-01', '10:00:00', '18:00:00', 500, 'Winner Certificate', 100, 1, 1, 'Archived', 'Paid', 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Auditorium', '2025-05-10 13:15:00');
+(1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Rejected', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate'),
+
+(2001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Tech Expo', 'Annual technology exposition', 'Face to face', 'NU Convention Center', '2023-03-10', '2023-03-10', '08:00:00', '17:00:00', 'Approved', 'Free', 'Open to all', 0, 500, '2023-02-01 09:00:00', 'Certificate of Participation'),
+
+(2002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Coding Bootcamp', 'Intensive coding bootcamp for beginners', 'Face to face', 'Lab 202', '2023-04-15', '2023-04-17', '09:00:00', '16:00:00', 'Approved', 'Paid', 'Members only', 100, 50, '2023-03-10 10:00:00', 'Certificate of Completion'),
+
+(2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
 
 -- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
 -- (2,"President");
@@ -2680,6 +2912,178 @@ VALUES
 ('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
 ('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
 ('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
+
+-- Insert 20 sample attendance records matching your users and events
+INSERT INTO tbl_event_attendance (event_id, user_id, status, time_in, time_out) VALUES
+-- For Innovation Pitch Fest (event_id 1001)
+(1001, '900f929ec408cb4', 'Attended', '2025-06-10 08:55:23', '2025-06-10 15:05:45'),
+(1001, '5fb95ed0a0d20daf', 'Evaluated', '2025-06-10 09:10:12', '2025-06-10 15:00:30'),
+(1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Pending', '2025-06-10 09:30:00', NULL),
+
+-- For Groove Jam 2025 (event_id 1002)
+(1002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Registered', NULL, NULL),
+(1002, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Pending', NULL, NULL),
+
+-- For Hack-It-Out (event_id 1003)
+(1003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
+(1003, '900f929ec408cb4', 'Registered', NULL, NULL),
+
+-- For Earth Hour Rally (event_id 1004)
+(1004, '5fb95ed0a0d20daf', 'Attended', '2025-06-15 06:25:00', '2025-06-15 10:35:00'),
+(1004, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2025-06-15 06:40:00', '2025-06-15 10:20:00'),
+(1004, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2025-06-15 07:00:00', NULL),
+
+-- For E-Sports Showdown (event_id 1005)
+(1005, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
+(1005, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
+
+-- For 2023 Tech Expo (event_id 2001)
+(2001, '900f929ec408cb4', 'Attended', '2023-03-10 07:45:00', '2023-03-10 17:15:00'),
+(2001, '5fb95ed0a0d20daf', 'Attended', '2023-03-10 08:10:00', '2023-03-10 16:50:00'),
+
+-- For 2023 Coding Bootcamp (event_id 2002)
+(2002, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2023-04-15 08:30:00', '2023-04-17 16:00:00'),
+(2002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2023-04-15 09:00:00', NULL),
+
+-- For 2023 Summer Seminar (event_id 2003)
+(2003, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
+(2003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
+(2003, '900f929ec408cb4', 'Attended', '2023-05-05 09:45:00', '2023-05-05 12:15:00');
+
+-- Insert test event
+INSERT INTO tbl_event (
+  event_id, organization_id, user_id, title, 
+  description, venue_type, venue, start_date, 
+  end_date, start_time, end_time, status, 
+  type, is_open_to, fee, capacity, created_at
+) VALUES (
+  9998, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
+  'Tech Conference 2023', 'Annual technology conference', 
+  'Face to face', 'NU Convention Center', '2023-11-15', 
+  '2023-11-17', '08:00:00', '18:00:00', 
+  'Approved', 'Paid', 'Open to all', 500, 200, NOW()
+);
+
+-- Attendee 1: Pending approval with transaction
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
+  500, 'Event Fee', 'Pending', 'payment_proof1.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Early bird registration'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
+  'Pending', NOW()
+);
+
+-- Attendee 2: Pending approval with unclear payment
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
+  500, 'Event Fee', 'Pending', 'unclear_payment.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Payment unclear - needs verification'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
+  'Pending', NOW()
+);
+
+-- Attendee 3: Approved registration
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 
+  500, 'Event Fee', 'Completed', 'clear_payment.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Payment verified - approved'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 
+  'Registered', NOW()
+);
+
+-- Attendee 4: Rejected registration
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
+  500, 'Event Fee', 'Failed', 'invalid_payment.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Payment failed verification - rejected'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
+  'Evaluated', NOW()
+);
+
+-- Attendee 5: Pending approval with no transaction yet (free event scenario)
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, '5fb95ed0a0d20daf', 
+  'Pending', NOW()
+);
+
+-- Attendee 6: Approved for free event
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, created_at
+) VALUES (
+  9998, '900f929ec408cb4', 
+  'Registered', NOW()
+);
+
+-- Attendee 7: Attended the event
+INSERT INTO tbl_transaction (
+  user_id, amount, transaction_type, status, proof_image, created_at
+) VALUES (
+  '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
+  500, 'Event Fee', 'Completed', 'attended_payment.jpg', NOW()
+);
+
+INSERT INTO tbl_transaction_event (
+  transaction_id, event_id, remarks
+) VALUES (
+  LAST_INSERT_ID(), 9998, 'Attended all days'
+);
+
+INSERT INTO tbl_event_attendance (
+  event_id, user_id, status, time_in, time_out, created_at
+) VALUES (
+  9998, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
+  'Attended', '2023-11-15 08:05:23', '2023-11-17 17:30:45', NOW()
+);
 
 -- INSERT INTO tbl_logs (
 --     user_id,

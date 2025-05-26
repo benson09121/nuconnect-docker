@@ -24,7 +24,7 @@ async function getEvents() {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetEvents();');
-        return rows;
+        return rows[0];
     } finally {
         connection.release();
     }
@@ -40,11 +40,35 @@ async function getEventById(event_id) {
     }
 }
 
+async function getAttendeesByEventId(event_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetEventAttendeesWithDetails(?);', [event_id]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
 async function getEventsByStatus(status) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetEventsByStatus(?);', [status]);
-        return rows;
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
+async function getPastEvents() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetPastEvents();');
+        console.log('Raw DB results:', rows); 
+        return rows[0] || []; 
+    } catch (error) {
+        console.error('DB Error in getPastEvents:', error);
+        throw error;
     } finally {
         connection.release();
     }
@@ -80,11 +104,52 @@ async function deleteEvent(event_id) {
     }
 }
 
+async function getUserByEmail(email) {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query('SELECT user_id FROM tbl_user WHERE email = ?', [email]);
+    return rows[0];
+  } finally {
+    connection.release();
+  }
+}
+
+async function approvePaidEventRegistration(event_id, user_id, approver_id, remarks) {
+    const connection = await pool.getConnection();
+    try {
+        const [result] = await connection.query(
+            'CALL ApprovePaidEventRegistration(?, ?, ?, ?);', 
+            [event_id, user_id, approver_id, remarks]
+        );
+        return result;
+    } finally {
+        connection.release();
+    }
+}
+
+async function rejectPaidEventRegistration(event_id, user_id, approver_id, remarks) {
+    const connection = await pool.getConnection();
+    try {
+        const [result] = await connection.query(
+            'CALL RejectPaidEventRegistration(?, ?, ?, ?);', 
+            [event_id, user_id, approver_id, remarks]
+        );
+        return result;
+    } finally {
+        connection.release();
+    }
+}
+
 module.exports = {
     addEvent,
     getEvents,
     getEventById,
+    getPastEvents,
+    getAttendeesByEventId,
     updateEvent,
     deleteEvent,
-    getEventsByStatus
+    getEventsByStatus,
+    getUserByEmail,
+    approvePaidEventRegistration,
+    rejectPaidEventRegistration
 };
