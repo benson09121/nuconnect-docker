@@ -129,11 +129,10 @@ async function getSpecificApplication(req, res) {
 async function approveApplication(req, res) {
     try {
         const { approval_id, comments, organization_id, application_id } = req.body;
-        res.json({approval_id, comments});
+        // Do NOT send any response before this line!
         const result = await organizationsModel.approveApplication(approval_id, comments, organization_id, application_id);
-
         res.json({ message: 'Application approved successfully' });
-    } catch (error) {
+    } catch (error) {   
         res.status(500).json({
             error: error.message || "An error occurred while approving the application.",
         });

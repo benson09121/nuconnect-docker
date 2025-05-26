@@ -31,7 +31,7 @@ async function getSpecificApplication(user_id, organization_name){
     }
 }
 
-async function approveApplication(approval_id, comments) {
+async function approveApplication(approval_id, comments, organization_id, application_id) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL ApproveApplication(?, ?, ?, ?);', [approval_id, comments, organization_id, application_id]);
