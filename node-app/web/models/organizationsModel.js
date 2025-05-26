@@ -31,8 +31,35 @@ async function getSpecificApplication(user_id, organization_name){
     }
 }
 
+async function approveApplication(approval_id, comments) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL ApproveApplication(?, ?, ?, ?);', [approval_id, comments, organization_id, application_id]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error approving application:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function rejectApplication(approval_id, comments, organization_id, application_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL RejectApplication(?, ?, ?, ?);', [application_id, approval_id, organization_id, comments]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error rejecting application:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
 
 module.exports = {
   createOrganizationApplication,
-  getSpecificApplication
+  getSpecificApplication,
+  approveApplication,
+  rejectApplication
 };
