@@ -185,6 +185,16 @@ async function rejectPaidEventRegistration(req, res) {
   }
 }
 
+async function getEventStats(req, res) {
+  try {
+    const event_id = req.params.id;
+    const stats = await eventModel.getEventStats(event_id);
+    res.status(200).json(stats);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
 module.exports = {
     addEvent,
     getEvents,
@@ -195,5 +205,6 @@ module.exports = {
     deleteEvent,
     getEventsByStatus,
     approvePaidEventRegistration,
-    rejectPaidEventRegistration
+    rejectPaidEventRegistration,
+    getEventStats
 };
