@@ -187,8 +187,9 @@ async function getActiveApplicationPeriod(req, res) {
 }
 
 async function updateApplicationPeriod(req, res) {
+    const { startDate, endDate, startTime, endTime, period_id } = req.body;
     try {
-        await requirementModel.updateApplicationPeriod();
+        await requirementModel.updateApplicationPeriod( startDate, endDate, startTime, endTime, period_id);
         res.status(200).json({ message: 'Requirement period updated successfully' });
     } catch (error) {
         res.status(500).json({
