@@ -140,6 +140,16 @@ async function rejectPaidEventRegistration(event_id, user_id, approver_id, remar
     }
 }
 
+async function getEventStats(event_id) {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query('CALL GetEventStatsForComponent(?)', [event_id]);
+    return rows[0][0];
+  } finally {
+    connection.release();
+  }
+}
+
 module.exports = {
     addEvent,
     getEvents,
@@ -151,5 +161,6 @@ module.exports = {
     getEventsByStatus,
     getUserByEmail,
     approvePaidEventRegistration,
-    rejectPaidEventRegistration
+    rejectPaidEventRegistration,
+    getEventStats
 };

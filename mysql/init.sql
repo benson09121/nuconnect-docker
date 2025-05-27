@@ -2704,6 +2704,113 @@ END $$
 
 DELIMITER ;
 
+-- Procedure to get event statistics
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventStatistics(IN p_event_id INT)
+BEGIN
+    -- Number of attendees (status = 'Attended')
+    SELECT COUNT(*) INTO @attendees_count
+    FROM tbl_event_attendance
+    WHERE event_id = p_event_id AND status = 'Attended';
+    
+    -- Number of feedbacks (status = 'Evaluated' or has evaluation)
+    SELECT COUNT(DISTINCT ea.user_id) INTO @feedback_count
+    FROM tbl_event_attendance ea
+    LEFT JOIN tbl_evaluation e ON ea.user_id = e.user_id AND ea.event_id = e.event_id
+    WHERE ea.event_id = p_event_id 
+    AND (ea.status = 'Evaluated' OR e.evaluation_id IS NOT NULL);
+    
+    -- Average rating (average of all likert_4 responses)
+    SELECT AVG(CAST(response_value AS DECIMAL)) INTO @avg_rating
+    FROM tbl_evaluation_response er
+    JOIN tbl_evaluation e ON er.evaluation_id = e.evaluation_id
+    JOIN tbl_evaluation_question eq ON er.question_id = eq.question_id
+    WHERE e.event_id = p_event_id AND eq.question_type = 'likert_4';
+    
+    -- Average feedback time in seconds
+    SELECT AVG(duration_seconds) INTO @avg_feedback_time
+    FROM tbl_evaluation
+    WHERE event_id = p_event_id;
+    
+    -- Return all statistics
+    SELECT 
+        @attendees_count AS attendeesCount,
+        @feedback_count AS feedbackCount,
+        ROUND(COALESCE(@avg_rating, 0), 2) AS averageRating,
+        CONCAT(FLOOR(COALESCE(@avg_feedback_time, 0) / 60), 'm ', 
+               MOD(COALESCE(@avg_feedback_time, 0), 60), 's') AS avgFeedbackTime;
+END $$
+
+DELIMITER ;
+
+-- Procedure to get event statistics for React component
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventStatsForComponent(IN p_event_id INT)
+BEGIN
+    DECLARE v_attendees_count INT;
+    DECLARE v_feedback_count INT;
+    DECLARE v_avg_rating DECIMAL(10,2);
+    DECLARE v_avg_feedback_time VARCHAR(20);
+    
+    -- Get statistics
+    CALL GetEventStatistics(p_event_id);
+    
+    -- Format the results for React component
+    SELECT 
+        attendeesCount,
+        feedbackCount,
+        averageRating,
+        avgFeedbackTime
+    FROM (
+        SELECT 
+            @attendees_count AS attendeesCount,
+            @feedback_count AS feedbackCount,
+            ROUND(COALESCE(@avg_rating, 0), 2) AS averageRating,
+            CASE 
+                WHEN @avg_feedback_time IS NULL THEN '0s'
+                WHEN @avg_feedback_time < 60 THEN CONCAT(@avg_feedback_time, 's')
+                ELSE CONCAT(FLOOR(@avg_feedback_time / 60), 'm ', MOD(@avg_feedback_time, 60), 's')
+            END AS avgFeedbackTime
+    ) AS stats;
+END $$
+
+DELIMITER ;
+
+    -- Get logs
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetLogs(
+    IN p_user_id VARCHAR(200),
+    IN p_type VARCHAR(100),
+    IN p_start_date DATETIME,
+    IN p_end_date DATETIME
+)
+BEGIN
+    SELECT 
+        l.log_id,
+        l.user_id,
+        CONCAT(u.f_name, ' ', u.l_name) AS full_name,
+        u.profile_picture,
+        l.timestamp,
+        l.action,
+        l.redirect_url,
+        l.file_path,
+        l.meta_data,
+        l.type
+    FROM tbl_logs l
+    LEFT JOIN tbl_user u ON l.user_id = u.user_id
+    WHERE
+        (p_user_id IS NULL OR l.user_id = p_user_id)
+        AND (p_type IS NULL OR l.type = p_type)
+        AND (p_start_date IS NULL OR l.timestamp >= p_start_date)
+        AND (p_end_date IS NULL OR l.timestamp <= p_end_date)
+    ORDER BY l.timestamp DESC;
+END $$
+
+DELIMITER ;
+
 -- INDEXES
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
@@ -2793,47 +2900,47 @@ INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUE
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
-("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 5);
+("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
 
--- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
--- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
--- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
--- INSERT INTO tbl_event (
---   event_id,
---   organization_id,
---   user_id,
---   title,
---   description,
---   venue_type,
---   venue,
---   start_date,
---   end_date,
---   start_time,
---   end_time,
---   status,
---   type,
---   is_open_to,
---   fee,
---   capacity,
---   created_at,
---   certificate
--- ) VALUES
--- (1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
+INSERT INTO tbl_event (
+  event_id,
+  organization_id,
+  user_id,
+  title,
+  description,
+  venue_type,
+  venue,
+  start_date,
+  end_date,
+  start_time,
+  end_time,
+  status,
+  type,
+  is_open_to,
+  fee,
+  capacity,
+  created_at,
+  certificate
+) VALUES
+(1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
 
--- (1002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Groove Jam 2025', 'Annual inter-school dance battle', 'Face to face', 'Open Grounds', '2025-07-20', '2025-07-20', '13:00:00', '19:00:00', 'Approved', 'Free', 'Open to all', 0, 300, '2025-05-05 10:30:00', 'Winner + Participation'),
+(1002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Groove Jam 2025', 'Annual inter-school dance battle', 'Face to face', 'Open Grounds', '2025-07-20', '2025-07-20', '13:00:00', '19:00:00', 'Approved', 'Free', 'Open to all', 0, 300, '2025-05-05 10:30:00', 'Winner + Participation'),
 
--- (1003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Hack-It-Out', '24-hour Hackathon for IT majors', 'Face to face', 'Tech Lab 101', '2025-08-05', '2025-08-05', '08:00:00', '08:00:00', 'Pending', 'Paid', 'Members only', 200, 60, '2025-05-12 15:45:00', 'Certificate + Swag'),
+(1003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Hack-It-Out', '24-hour Hackathon for IT majors', 'Face to face', 'Tech Lab 101', '2025-08-05', '2025-08-05', '08:00:00', '08:00:00', 'Pending', 'Paid', 'Members only', 200, 60, '2025-05-12 15:45:00', 'Certificate + Swag'),
 
--- (1004, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Earth Hour Rally', 'Tree planting and cleanup event', 'Face to face', 'Community Park', '2025-06-15', '2025-06-15', '06:30:00', '10:30:00', 'Approved', 'Free', 'Open to all', 0, 150, '2025-05-15 09:00:00', 'Eco Warrior Badge'),
+(1004, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Earth Hour Rally', 'Tree planting and cleanup event', 'Face to face', 'Community Park', '2025-06-15', '2025-06-15', '06:30:00', '10:30:00', 'Approved', 'Free', 'Open to all', 0, 150, '2025-05-15 09:00:00', 'Eco Warrior Badge'),
 
--- (1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Rejected', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate'),
+(1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Rejected', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate'),
 
--- (2001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Tech Expo', 'Annual technology exposition', 'Face to face', 'NU Convention Center', '2023-03-10', '2023-03-10', '08:00:00', '17:00:00', 'Approved', 'Free', 'Open to all', 0, 500, '2023-02-01 09:00:00', 'Certificate of Participation'),
+(2001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Tech Expo', 'Annual technology exposition', 'Face to face', 'NU Convention Center', '2023-03-10', '2023-03-10', '08:00:00', '17:00:00', 'Approved', 'Free', 'Open to all', 0, 500, '2023-02-01 09:00:00', 'Certificate of Participation'),
 
--- (2002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Coding Bootcamp', 'Intensive coding bootcamp for beginners', 'Face to face', 'Lab 202', '2023-04-15', '2023-04-17', '09:00:00', '16:00:00', 'Approved', 'Paid', 'Members only', 100, 50, '2023-03-10 10:00:00', 'Certificate of Completion'),
+(2002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Coding Bootcamp', 'Intensive coding bootcamp for beginners', 'Face to face', 'Lab 202', '2023-04-15', '2023-04-17', '09:00:00', '16:00:00', 'Approved', 'Paid', 'Members only', 100, 50, '2023-03-10 10:00:00', 'Certificate of Completion'),
 
--- (2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
+(2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
 
 -- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
 -- (2,"President");
@@ -3045,7 +3152,7 @@ INSERT INTO tbl_event_attendance (
   event_id, user_id, status, created_at
 ) VALUES (
   9998, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
-  'Evaluated', NOW()
+  'Rejected', NOW()
 );
 
 -- Attendee 5: Pending approval with no transaction yet (free event scenario)
@@ -3131,3 +3238,71 @@ VALUES(
 1,
 "6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0"
 );
+
+-- Insert evaluation question groups
+INSERT INTO tbl_evaluation_question_group (group_title, group_description) VALUES
+('Event Content', 'Questions about the event content and sessions'),
+('Facilities', 'Questions about the venue and facilities'),
+('Overall Experience', 'General feedback about the event');
+
+-- Insert evaluation questions
+INSERT INTO tbl_evaluation_question (group_id, question_text, question_type) VALUES
+(1, 'How relevant were the topics to your interests?', 'likert_4'),
+(1, 'How would you rate the quality of the speakers?', 'likert_4'),
+(1, 'What topics would you like to see in future events?', 'textbox'),
+(2, 'How would you rate the venue facilities?', 'likert_4'),
+(2, 'Was the seating comfortable?', 'likert_4'),
+(3, 'Overall, how satisfied were you with the event?', 'likert_4'),
+(3, 'Would you recommend this event to others?', 'likert_4'),
+(3, 'Any additional comments or suggestions?', 'textbox');
+
+-- Link questions to our test event
+INSERT INTO tbl_event_evaluation_config (event_id, group_id) VALUES
+(9998, 1),
+(9998, 2),
+(9998, 3);
+
+-- Evaluation for Attendee 3 (Registered)
+INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+(9998, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', '2023-11-17 18:30:00', 240);
+
+-- Responses for Attendee 3
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(1, 1, '3'), -- Relevant topics
+(1, 2, '4'), -- Speaker quality
+(1, 3, 'More hands-on workshops'), -- Future topics
+(1, 4, '3'), -- Venue facilities
+(1, 5, '2'), -- Seating comfort
+(1, 6, '4'), -- Overall satisfaction
+(1, 7, '4'), -- Would recommend
+(1, 8, 'Great event overall!'); -- Comments
+
+-- Evaluation for Attendee 6 (Registered - free event)
+INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+(9998, '900f929ec408cb4', '2023-11-17 19:15:00', 180);
+
+-- Responses for Attendee 6
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(2, 1, '4'),
+(2, 2, '3'),
+(2, 3, 'More case studies'),
+(2, 4, '4'),
+(2, 5, '3'),
+(2, 6, '3'),
+(2, 7, '3'),
+(2, 8, 'Good content but too crowded');
+
+-- Evaluation for Attendee 7 (Attended)
+INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+(9998, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2023-11-17 17:45:00', 300);
+
+-- Responses for Attendee 7
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(3, 1, '4'),
+(3, 2, '4'),
+(3, 3, 'More technical deep dives'),
+(3, 4, '2'),
+(3, 5, '1'),
+(3, 6, '3'),
+(3, 7, '3'),
+(3, 8, 'Seating was very uncomfortable');
