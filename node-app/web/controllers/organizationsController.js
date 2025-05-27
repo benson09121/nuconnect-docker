@@ -189,6 +189,17 @@ async function getOrganizationLogo(req, res) {
     }
 }
 
+async function getOrganizationApplications(req, res) {
+    try {
+        const applications = await organizationsModel.getOrganizationApplications();
+        res.json(applications);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the organization applications.",
+        });
+    }
+}
+
 
 module.exports = {
     getOrganizations,
@@ -197,5 +208,6 @@ module.exports = {
     approveApplication,
     rejectApplication,
     getOrganizationRequirement,
-    getOrganizationLogo
+    getOrganizationLogo,
+    getOrganizationApplications
 };

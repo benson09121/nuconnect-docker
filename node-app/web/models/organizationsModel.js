@@ -1,10 +1,10 @@
 const pool = require('../../config/db');
 
 
-async function createOrganizationApplication(organizations, executives, requirements,user_id){
+async function createOrganizationApplication(organizations, executives, requirements, user_id) {
     const connection = await pool.getConnection();
     try {
-        const [rows] = await connection.query('CALL CreateOrganizationApplication(?,?,?,?);', [JSON.stringify(organizations),JSON.stringify(executives), JSON.stringify(requirements),user_id]);
+        const [rows] = await connection.query('CALL CreateOrganizationApplication(?,?,?,?);', [JSON.stringify(organizations), JSON.stringify(executives), JSON.stringify(requirements), user_id]);
         return rows[0];
     }
     catch (error) {
@@ -16,7 +16,7 @@ async function createOrganizationApplication(organizations, executives, requirem
     }
 }
 
-async function getSpecificApplication(user_id, organization_name){
+async function getSpecificApplication(user_id, organization_name) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetSpecificApplication(?, ?);', [user_id, organization_name]);
@@ -57,9 +57,22 @@ async function rejectApplication(approval_id, comments, organization_id, applica
     }
 }
 
+async function getOrganizationApplications() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizationApplications();');
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching organization applications:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
 module.exports = {
-  createOrganizationApplication,
-  getSpecificApplication,
-  approveApplication,
-  rejectApplication
+    createOrganizationApplication,
+    getSpecificApplication,
+    approveApplication,
+    rejectApplication,
+    getOrganizationApplications
 };

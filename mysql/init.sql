@@ -10,11 +10,9 @@ FLUSH PRIVILEGES;
 SET GLOBAL time_zone = '+8:00';
 SET GLOBAL event_scheduler = ON;
 
- 
-DROP DATABASE IF EXISTS db_nuconnect;
+ DROP DATABASE IF EXISTS db_nuconnect;
 CREATE DATABASE db_nuconnect;
 USE db_nuconnect;
-
 CREATE TABLE tbl_role(
     role_id INT AUTO_INCREMENT PRIMARY KEY,
     role_name VARCHAR(100) UNIQUE NOT NULL,
@@ -24,7 +22,7 @@ CREATE TABLE tbl_role(
 );
 CREATE TABLE tbl_approval_role (
     approval_role_id INT AUTO_INCREMENT PRIMARY KEY,
-    role_Id INT NOT NULL,
+    role_id INT NOT NULL, -- fixed typo
     hierarchy_order INT UNIQUE NOT NULL,
     description VARCHAR(255),
     FOREIGN KEY (role_id) REFERENCES tbl_role(role_id) ON DELETE CASCADE
@@ -71,7 +69,7 @@ CREATE TABLE tbl_role_permission(
 CREATE TABLE tbl_organization(
     organization_id INT AUTO_INCREMENT PRIMARY KEY,
     adviser_id VARCHAR(200) NOT NULL,
-    name VARCHAR(100) NOT NULL,
+    name VARCHAR(100) NOT NULL UNIQUE,
     description TEXT,
     base_program_id INT NULL, -- NULL meaning open to all
     logo VARCHAR(255),
@@ -491,7 +489,7 @@ CREATE TABLE tbl_application (
     application_type ENUM('new', 'renewal') NOT NULL,
     period_id INT NOT NULL,
     applicant_user_id VARCHAR(200) NOT NULL,
-    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+    status ENUM('Pending', 'Approved', 'Rejected') DEFAULT 'Pending', -- use capitalized values everywhere
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE SET NULL ,
@@ -1740,12 +1738,14 @@ DELIMITER ;
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE UpdateRequirement(IN
-	p_requirement_id INT,
+    p_requirement_id INT,
     p_requirement_name VARCHAR(255),
     p_file_path VARCHAR(255)
 )
 BEGIN
-	UPDATE tbl_application_requirement SET requirement_name = p_requirement_name, file_path = p_file_path;
+    UPDATE tbl_application_requirement 
+    SET requirement_name = p_requirement_name, file_path = p_file_path
+    WHERE requirement_id = p_requirement_id;
 END $$
 DELIMITER ;
 
@@ -1811,6 +1811,7 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
+
 CREATE DEFINER='admin'@'%' PROCEDURE InitiateApprovalProcess(IN p_application_id INT)
 BEGIN
     -- 1. Declare variables first
@@ -1921,10 +1922,11 @@ BEGIN
 
     -- Update application status
     UPDATE tbl_application 
-    SET status = 'pending'
+    SET status = 'Pending'
     WHERE application_id = p_application_id;
 END$$
 DELIMITER ;
+
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE CreateOrganizationApplication(
@@ -1932,7 +1934,7 @@ CREATE DEFINER='admin'@'%' PROCEDURE CreateOrganizationApplication(
     IN p_executives JSON,
     IN p_requirements JSON,
     IN p_user_id VARCHAR(200)
-    )
+)
 BEGIN
     DECLARE v_organization_id INT;
     DECLARE v_program_id INT;
@@ -1947,6 +1949,7 @@ BEGIN
     DECLARE v_rank_number INT;
     DECLARE v_rank_id INT;
     DECLARE v_error_msg VARCHAR(255);
+    DECLARE v_name_exists TINYINT(1) DEFAULT 0;
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -1965,6 +1968,19 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'User program not found';
     END IF;
 
+    -- Check organization name uniqueness
+    SET v_org_name = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_name'));
+    SELECT EXISTS(
+        SELECT 1 
+        FROM tbl_organization 
+        WHERE name = v_org_name
+    ) INTO v_name_exists;
+
+    IF v_name_exists THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Organization name already exists. Please choose a different name.';
+    END IF;
+
     -- Create organization
     INSERT INTO tbl_organization (
         adviser_id,
@@ -1980,14 +1996,15 @@ BEGIN
         category
     ) VALUES (
         p_user_id,
-        JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_name')),
+        v_org_name,
         JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_description')),
         JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_logo')),
         v_program_id,
         'Pending',
         JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.fee_duration')),
         CASE
-            WHEN JSON_EXTRACT(p_organization, '$.fee_amount') IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.fee_amount')) = 'null'
+            WHEN JSON_EXTRACT(p_organization, '$.fee_amount') IS NULL 
+                 OR JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.fee_amount')) = 'null'
                 THEN NULL
             ELSE CAST(JSON_EXTRACT(p_organization, '$.fee_amount') AS DECIMAL(10,2))
         END,
@@ -1997,7 +2014,6 @@ BEGIN
     );
 
     SET v_organization_id = LAST_INSERT_ID();
-    SET v_org_name = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_name'));
     SET v_logo_filename = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_logo'));
     SET v_sanitized_name = LOWER(REPLACE(v_org_name, ' ', '-'));
 
@@ -2063,7 +2079,7 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Organization must have one member with rank 5 (president equivalent)';
     END IF;
 
-    -- Create renewal cycle after users exist
+    -- Create renewal cycle
     INSERT INTO tbl_renewal_cycle (
         organization_id,
         cycle_number,
@@ -2158,6 +2174,7 @@ BEGIN
     SET v_application_id = LAST_INSERT_ID();
 
     CALL InitiateApprovalProcess(v_application_id);
+
     -- Handle requirements
     SET v_requirement_count = JSON_LENGTH(p_requirements);
     SET i = 0;
@@ -2198,6 +2215,7 @@ BEGIN
         CONCAT(v_sanitized_name, '/logo/', v_logo_filename) AS logo_path,
         CONCAT(v_sanitized_name, '/requirements/') AS requirements_dir;
 END$$
+
 DELIMITER ;
 
     -- For all events
@@ -2330,7 +2348,6 @@ BEGIN
 END $$
 
 DELIMITER ;
-
 
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetSpecificApplication(
@@ -2537,7 +2554,7 @@ BEGIN
 END$$
 DELIMITER ;
 
-    -- Get past events
+-- Get past events
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetPastEvents()
 BEGIN
@@ -2701,6 +2718,42 @@ BEGIN
 
     SELECT 'Attendance rejected and soft-deleted successfully' AS message;
 END $$
+
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationApplications()
+BEGIN
+
+    SELECT 
+        org.organization_id,
+        org.name AS organization_name,
+        org.logo AS organization_logo,
+        org.status AS organization_status,
+        org.category,
+        org.base_program_id,
+        p.name AS program_name,
+        org.membership_fee_type,
+        org.membership_fee_amount,
+        org.is_recruiting,
+        org.is_open_to_all_courses,
+        org.created_at AS organization_created,
+        app.application_id,
+        app.cycle_number,
+        app.application_type,
+        app.period_id,
+        app.applicant_user_id,
+        app.status AS application_status,
+        app.created_at AS application_created,
+        app.updated_at AS application_updated
+    FROM tbl_organization org
+    INNER JOIN tbl_application app 
+        ON org.organization_id = app.organization_id
+    LEFT JOIN tbl_program p
+        ON org.base_program_id = p.program_id
+    WHERE app.status = 'Pending'
+    ORDER BY org.created_at DESC, app.created_at DESC;
+END$$
 
 DELIMITER ;
 
@@ -2900,11 +2953,47 @@ INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUE
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
-("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
+("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 5);
+
+
+INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
+(1, 'President', 'Highest authority with full permissions'),
+(2, 'Vice President', 'Second-in-command'),
+(3, 'Secretary', 'Administrative lead'),
+(4, 'Treasurer', 'Financial manager'),
+(5, 'Officer', 'General executive member');
+
+-- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+-- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+-- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+
+-- -- Insert events first
+-- INSERT INTO tbl_event (
+--   event_id,
+--   organization_id,
+--   user_id,
+--   title,
+--   description,
+--   venue_type,
+--   venue,
+--   start_date,
+--   end_date,
+--   start_time,
+--   end_time,
+--   status,
+--   type,
+--   is_open_to,
+--   fee,
+--   capacity,
+--   created_at,
+--   certificate
+-- ) VALUES
+-- (1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
 
 INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+
 
 INSERT INTO tbl_event (
   event_id,
@@ -2942,211 +3031,26 @@ INSERT INTO tbl_event (
 
 (2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
 
--- INSERT INTO tbl_executive_role(organization_id, role_title)VALUES
--- (2,"President");
+-- -- Then insert attendance records
+-- INSERT INTO tbl_event_attendance (event_id, user_id, status, time_in, time_out) VALUES
+-- -- For Innovation Pitch Fest (event_id 1001)
+-- (1001, '900f929ec408cb4', 'Attended', '2025-06-10 08:55:23', '2025-06-10 15:05:45'),
+-- (1001, '5fb95ed0a0d20daf', 'Evaluated', '2025-06-10 09:10:12', '2025-06-10 15:00:30'),
+-- (1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Pending', '2025-06-10 09:30:00', NULL),
 
--- INSERT INTO tbl_organization_members(organization_id,user_id, member_type, executive_role_id)
--- VALUES (1, "900f929ec408cb4", "Member",null),
--- (2, "86533891asdvf", "Executive",null),
--- (2, "5fb95ed0a0d20daf","Member",1);
+-- -- For Groove Jam 2025 (event_id 1002)
+-- (1002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Registered', NULL, NULL),
+-- (1002, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Pending', NULL, NULL),
 
--- 
-
-INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
-(1, 'President', 'Highest authority with full permissions'),
-(2, 'Vice President', 'Second-in-command'),
-(3, 'Secretary', 'Administrative lead'),
-(4, 'Treasurer', 'Financial manager'),
-(5, 'Officer', 'General executive member');
-
--- QUESTIONS
-
-INSERT INTO tbl_evaluation_question_group (group_title, group_description, is_active)
-VALUES 
-('Activity: Meeting/Seminar/Conference/Workshop/Quiz Bee/Competition/Sport fest, etc.', 'Question about activities', TRUE),
-('About the Speaker/Resource person', 'Feedback about event speakers/presenters', TRUE),
-('Meals', 'Feedback about meals', TRUE),
-('Handouts', 'Feedback about handouts', TRUE),
-('Transportation', 'Feedback about transportation', TRUE),
-('Comments and Suggestions', 'Feedback about the whole event', TRUE);
-
-INSERT INTO tbl_evaluation_question (question_text, question_type, group_id, is_required)
-VALUES
-('Is the activity relevant/important to you?', 'likert_4', 1, TRUE),
-('Is the program relevant to the course/you’re in?', 'likert_4', 1, TRUE),
-('Were the objectives clear and communicated before the activity?', 'likert_4', 1, TRUE),
-('Were the objectives met by the activity?', 'likert_4', 1, TRUE),
-('Was the venue proper for this kind of activity?', 'likert_4', 1, TRUE),
-('Did the activity start and end on time?', 'likert_4', 1, TRUE),
-('Did the organizers maintain an orderly environment all throughout the activity?', 'likert_4', 1, TRUE),
-('Was the event/activity well-advertised/properly announce?', 'likert_4', 1, TRUE),
-('Would you recommend this activity to your classmates/friends?', 'likert_4', 1, TRUE),
-('Do you want an activity like this to happen more often?', 'likert_4', 1, TRUE),
-('Overall evaluation', 'likert_4', 1, TRUE),
-('Was the speaker well-prepared and knowledgeable on the topic?', 'likert_4', 2, TRUE),
-('Did the speaker use different and appropriate methods in delivering the topic?', 'likert_4', 2, TRUE),
-('Was the speaker able to connect with the audience and catch their attention?', 'likert_4', 2, TRUE),
-('Were the meals/snacks provided enough to fill you?', 'likert_4', 3, TRUE),
-('Did the meals/snacks have a pleasant taste?', 'likert_4', 3, TRUE),
-('Are the handouts provided useful?', 'likert_4', 4, TRUE),
-('Is the printing of the handouts clear?', 'likert_4', 4, TRUE),
-('Did you feel safe during the travel to the venue?', 'likert_4', 5, TRUE),
-('Did you feel that the transportation provided is in good running condition?', 'likert_4', 5, TRUE),
-('Did you feel safe with the driver’s skills?', 'likert_4', 5, TRUE),
-('What important knowledge or information did you gain from this activity?', 'textbox', 6, TRUE),
-('What did you like most about the activity?', 'textbox', 6, TRUE),
-('What did you like least about the activity?', 'textbox', 6, TRUE),
-('Any other comments/suggestions for further improvement the activity?', 'textbox', 6, TRUE);
-
--- REQUIREMENTS
+-- -- For Hack-It-Out (event_id 1003)
+-- (1003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
+-- (1003, '900f929ec408cb4', 'Registered', NULL, NULL),
 
 
-INSERT INTO tbl_application_requirement(
-requirement_name, 
-is_applicable_to, 
-file_path, 
-created_by, 
-created_at, 
-updated_at
-) 
-VALUES
-('Letter of Intent', 'new', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
-('Student Org Application Form', 'new', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
-('By Laws of the Organization', 'new', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
-('List of Officers/Founders', 'new', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
-('Letter from the College Dean', 'new', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
-('List of Members', 'new', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
-('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
-('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
-('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
-
--- Insert 20 sample attendance records matching your users and events
-INSERT INTO tbl_event_attendance (event_id, user_id, status, time_in, time_out) VALUES
--- For Innovation Pitch Fest (event_id 1001)
-(1001, '900f929ec408cb4', 'Attended', '2025-06-10 08:55:23', '2025-06-10 15:05:45'),
-(1001, '5fb95ed0a0d20daf', 'Evaluated', '2025-06-10 09:10:12', '2025-06-10 15:00:30'),
-(1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Pending', '2025-06-10 09:30:00', NULL),
-
--- For Groove Jam 2025 (event_id 1002)
-(1002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Registered', NULL, NULL),
-(1002, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Pending', NULL, NULL),
-
--- For Hack-It-Out (event_id 1003)
-(1003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
-(1003, '900f929ec408cb4', 'Registered', NULL, NULL),
-
--- For Earth Hour Rally (event_id 1004)
-(1004, '5fb95ed0a0d20daf', 'Attended', '2025-06-15 06:25:00', '2025-06-15 10:35:00'),
-(1004, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2025-06-15 06:40:00', '2025-06-15 10:20:00'),
-(1004, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2025-06-15 07:00:00', NULL),
-
--- For E-Sports Showdown (event_id 1005)
-(1005, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
-(1005, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
-
--- For 2023 Tech Expo (event_id 2001)
-(2001, '900f929ec408cb4', 'Attended', '2023-03-10 07:45:00', '2023-03-10 17:15:00'),
-(2001, '5fb95ed0a0d20daf', 'Attended', '2023-03-10 08:10:00', '2023-03-10 16:50:00'),
-
--- For 2023 Coding Bootcamp (event_id 2002)
-(2002, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2023-04-15 08:30:00', '2023-04-17 16:00:00'),
-(2002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2023-04-15 09:00:00', NULL),
-
--- For 2023 Summer Seminar (event_id 2003)
-(2003, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
-(2003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
-(2003, '900f929ec408cb4', 'Attended', '2023-05-05 09:45:00', '2023-05-05 12:15:00');
-
--- Insert test event
-INSERT INTO tbl_event (
-  event_id, organization_id, user_id, title, 
-  description, venue_type, venue, start_date, 
-  end_date, start_time, end_time, status, 
-  type, is_open_to, fee, capacity, created_at
-) VALUES (
-  9998, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
-  'Tech Conference 2023', 'Annual technology conference', 
-  'Face to face', 'NU Convention Center', '2023-11-15', 
-  '2023-11-17', '08:00:00', '18:00:00', 
-  'Approved', 'Paid', 'Open to all', 500, 200, NOW()
-);
-
--- Attendee 1: Pending approval with transaction
-INSERT INTO tbl_transaction (
-  user_id, amount, transaction_type, status, proof_image, created_at
-) VALUES (
-  '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
-  500, 'Event Fee', 'Pending', 'payment_proof1.jpg', NOW()
-);
-
-INSERT INTO tbl_transaction_event (
-  transaction_id, event_id, remarks
-) VALUES (
-  LAST_INSERT_ID(), 9998, 'Early bird registration'
-);
-
-INSERT INTO tbl_event_attendance (
-  event_id, user_id, status, created_at
-) VALUES (
-  9998, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
-  'Pending', NOW()
-);
-
--- Attendee 2: Pending approval with unclear payment
-INSERT INTO tbl_transaction (
-  user_id, amount, transaction_type, status, proof_image, created_at
-) VALUES (
-  'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
-  500, 'Event Fee', 'Pending', 'unclear_payment.jpg', NOW()
-);
-
-INSERT INTO tbl_transaction_event (
-  transaction_id, event_id, remarks
-) VALUES (
-  LAST_INSERT_ID(), 9998, 'Payment unclear - needs verification'
-);
-
-INSERT INTO tbl_event_attendance (
-  event_id, user_id, status, created_at
-) VALUES (
-  9998, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 
-  'Pending', NOW()
-);
-
--- Attendee 3: Approved registration
-INSERT INTO tbl_transaction (
-  user_id, amount, transaction_type, status, proof_image, created_at
-) VALUES (
-  '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 
-  500, 'Event Fee', 'Completed', 'clear_payment.jpg', NOW()
-);
-
-INSERT INTO tbl_transaction_event (
-  transaction_id, event_id, remarks
-) VALUES (
-  LAST_INSERT_ID(), 9998, 'Payment verified - approved'
-);
-
-INSERT INTO tbl_event_attendance (
-  event_id, user_id, status, created_at
-) VALUES (
-  9998, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 
-  'Registered', NOW()
-);
-
--- Attendee 4: Rejected registration
-INSERT INTO tbl_transaction (
-  user_id, amount, transaction_type, status, proof_image, created_at
-) VALUES (
-  'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
-  500, 'Event Fee', 'Failed', 'invalid_payment.jpg', NOW()
-);
-
-INSERT INTO tbl_transaction_event (
-  transaction_id, event_id, remarks
-) VALUES (
-  LAST_INSERT_ID(), 9998, 'Payment failed verification - rejected'
-);
+-- -- For Earth Hour Rally (event_id 1004)
+-- (1004, '5fb95ed0a0d20daf', 'Attended', '2025-06-15 06:25:00', '2025-06-15 10:35:00'),
+-- (1004, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2025-06-15 06:40:00', '2025-06-15 10:20:00'),
+-- (1004, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2025-06-15 07:00:00', NULL),
 
 INSERT INTO tbl_event_attendance (
   event_id, user_id, status, created_at
@@ -3155,42 +3059,22 @@ INSERT INTO tbl_event_attendance (
   'Rejected', NOW()
 );
 
--- Attendee 5: Pending approval with no transaction yet (free event scenario)
-INSERT INTO tbl_event_attendance (
-  event_id, user_id, status, created_at
-) VALUES (
-  9998, '5fb95ed0a0d20daf', 
-  'Pending', NOW()
-);
+-- -- For E-Sports Showdown (event_id 1005)
+-- (1005, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
+-- (1005, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
 
--- Attendee 6: Approved for free event
-INSERT INTO tbl_event_attendance (
-  event_id, user_id, status, created_at
-) VALUES (
-  9998, '900f929ec408cb4', 
-  'Registered', NOW()
-);
+-- -- For 2023 Tech Expo (event_id 2001)
+-- (2001, '900f929ec408cb4', 'Attended', '2023-03-10 07:45:00', '2023-03-10 17:15:00'),
+-- (2001, '5fb95ed0a0d20daf', 'Attended', '2023-03-10 08:10:00', '2023-03-10 16:50:00'),
 
--- Attendee 7: Attended the event
-INSERT INTO tbl_transaction (
-  user_id, amount, transaction_type, status, proof_image, created_at
-) VALUES (
-  '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
-  500, 'Event Fee', 'Completed', 'attended_payment.jpg', NOW()
-);
+-- -- For 2023 Coding Bootcamp (event_id 2002)
+-- (2002, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2023-04-15 08:30:00', '2023-04-17 16:00:00'),
+-- (2002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2023-04-15 09:00:00', NULL),
 
-INSERT INTO tbl_transaction_event (
-  transaction_id, event_id, remarks
-) VALUES (
-  LAST_INSERT_ID(), 9998, 'Attended all days'
-);
+-- -- For 2023 Summer Seminar (event_id 2003)
+-- (2003, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
+-- (2003, '900f929ec408cb4', 'Attended', '2023-05-05 09:45:00', '2023-05-05 12:15:00');
 
-INSERT INTO tbl_event_attendance (
-  event_id, user_id, status, time_in, time_out, created_at
-) VALUES (
-  9998, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 
-  'Attended', '2023-11-15 08:05:23', '2023-11-17 17:30:45', NOW()
-);
 
 -- INSERT INTO tbl_logs (
 --     user_id,
