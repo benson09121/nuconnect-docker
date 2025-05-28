@@ -20,6 +20,30 @@ async function addEvent(event) {
     }
 }
 
+async function getEventRequirements() {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query('CALL GetEventRequirements();');
+    return rows[0];
+  } finally {
+    connection.release();
+  }
+}
+
+async function saveEventRequirements(user_id, requirements) {
+  const connection = await pool.getConnection();
+  try {
+    // requirements should be a JS array; stringify for MySQL JSON
+    const [result] = await connection.query(
+      'CALL SaveEventRequirements(?, ?);',
+      [user_id, JSON.stringify(requirements)]
+    );
+    return result;
+  } finally {
+    connection.release();
+  }
+}
+
 async function getEvents() {
     const connection = await pool.getConnection();
     try {
@@ -64,10 +88,8 @@ async function getPastEvents() {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetPastEvents();');
-        console.log('Raw DB results:', rows); 
         return rows[0] || []; 
     } catch (error) {
-        console.error('DB Error in getPastEvents:', error);
         throw error;
     } finally {
         connection.release();
@@ -160,11 +182,18 @@ async function getAllEvaluationQuestions() {
   }
 }
 
-async function getEventEvaluationResponses(event_id) {
+async function getEventEvaluationResponsesByGroup(event_id) {
   const connection = await pool.getConnection();
   try {
-    const [rows] = await connection.query('CALL GetEventEvaluationResponses(?);', [event_id]);
-    return rows[0];
+    const [rows] = await connection.query('CALL GetEventEvaluationResponsesByGroup(?);', [event_id]);
+    if (rows[0] && rows[0][0] && rows[0][0].evaluation_responses) {
+      const data = rows[0][0].evaluation_responses;
+      if (typeof data === 'string') {
+        return JSON.parse(data);
+      }
+      return data;
+    }
+    return [];
   } finally {
     connection.release();
   }
@@ -172,6 +201,8 @@ async function getEventEvaluationResponses(event_id) {
 
 module.exports = {
     addEvent,
+    getEventRequirements,
+    saveEventRequirements,
     getEvents,
     getEventById,
     getPastEvents,
@@ -184,5 +215,5 @@ module.exports = {
     rejectPaidEventRegistration,
     getEventStats,
     getAllEvaluationQuestions,
-    getEventEvaluationResponses
+    getEventEvaluationResponsesByGroup
 };
