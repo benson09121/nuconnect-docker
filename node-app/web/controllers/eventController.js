@@ -12,6 +12,43 @@ async function addEvent(req, res) {
     }
 }
 
+async function getEventRequirements(req, res) {
+  try {
+    const requirements = await eventModel.getEventRequirements();
+    res.status(200).json(requirements);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while fetching event requirements.",
+    });
+  }
+}
+
+async function saveEventRequirements(req, res) {
+  try {
+    let { user_id, user_email, requirements } = req.body;
+
+    // If user_id is not provided but user_email is, look up user_id
+    if (!user_id && user_email) {
+      const user = await eventModel.getUserByEmail(user_email);
+      if (!user) {
+        return res.status(404).json({ message: "User not found for the provided email." });
+      }
+      user_id = user.user_id;
+    }
+
+    if (!user_id || !Array.isArray(requirements)) {
+      return res.status(400).json({ message: "user_id (or user_email) and requirements array are required." });
+    }
+
+    await eventModel.saveEventRequirements(user_id, requirements);
+    res.status(200).json({ message: "Event requirements saved successfully." });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while saving event requirements.",
+    });
+  }
+}
+
 async function getEvents(req, res) {
     try {
         const events = await eventModel.getEvents();
@@ -71,8 +108,7 @@ async function getEventsByStatus(req, res) {
 async function getPastEvents(req, res) {
     try {
         const events = await eventModel.getPastEvents();
-        console.log('Past events from DB:', events); // Add this log
-        res.status(200).json(events || []); // Ensure array is always returned
+        res.status(200).json(events || []);
     } catch (error) {
         console.error('Error in getPastEvents:', error);
         res.status(500).json({
@@ -208,17 +244,17 @@ async function getAllEvaluationQuestions(req, res) {
   }
 }
 
-async function getEventEvaluationResponses(req, res) {
+async function getEventEvaluationResponsesByGroup(req, res) {
   try {
     const event_id = req.params.id;
-    const responses = await eventModel.getEventEvaluationResponses(event_id);
+    const responses = await eventModel.getEventEvaluationResponsesByGroup(event_id);
     if (!responses || responses.length === 0) {
-      return res.status(404).json({ message: 'No evaluation responses found for this event' });
+      return res.status(404).json({ message: 'No grouped evaluation responses found for this event' });
     }
     res.status(200).json(responses);
   } catch (error) {
     res.status(500).json({
-      error: error.message || "An error occurred while fetching evaluation responses.",
+      error: error.message || "An error occurred while fetching grouped evaluation responses.",
     });
   }
 }
@@ -226,6 +262,8 @@ async function getEventEvaluationResponses(req, res) {
 
 module.exports = {
     addEvent,
+    getEventRequirements,
+    saveEventRequirements,
     getEvents,
     getEventById,
     getPastEvents,
@@ -237,5 +275,5 @@ module.exports = {
     rejectPaidEventRegistration,
     getEventStats,
     getAllEvaluationQuestions,
-    getEventEvaluationResponses
+    getEventEvaluationResponsesByGroup
 };
