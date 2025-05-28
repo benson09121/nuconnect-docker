@@ -215,13 +215,18 @@ async function checkOrganizationName(req, res) {
 async function checkOrganizationEmails(req, res) {
     try {
         const { emails } = req.body;
-        const exists = await organizationsModel.checkOrganizationEmails(emails);
+        // Fix: flatten if double-wrapped (array in array)
+        let emailList = emails;
+        if (Array.isArray(emails) && emails.length === 1 && Array.isArray(emails[0])) {
+            emailList = emails[0];
+        }
+        const exists = await organizationsModel.checkOrganizationEmails(JSON.stringify(emailList));
         res.json({ exists });
     } catch (error) {
         res.status(500).json({
             error: error.message || "An error occurred while checking the organization emails.",
         });
-    }
+    }   
 }
 
 
@@ -234,5 +239,6 @@ module.exports = {
     getOrganizationRequirement,
     getOrganizationLogo,
     getOrganizationApplications,
-    checkOrganizationName
+    checkOrganizationName,
+    checkOrganizationEmails 
 };
