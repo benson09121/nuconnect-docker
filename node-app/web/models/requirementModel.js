@@ -108,7 +108,7 @@ async function getActiveApplicationPeriod(){
 async function updateApplicationPeriod(startDate, endDate, startTime, endTime, period_id) {
     const connection = await pool.getConnection();
     try {
-        const [rows] = await connection.query('CALL UpdateApplicationPeriod(?, ?, ?, ?);',[startDate, endDate, startTime, endTime, period_id]);
+        const [rows] = await connection.query('CALL UpdateApplicationPeriod(?, ?, ?, ?, ?);',[startDate, endDate, startTime, endTime, period_id]);
         return rows[0];
     }
     catch (error) {
