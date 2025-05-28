@@ -3,7 +3,6 @@ const eventModel = require('../models/eventModel');
 async function addEvent(req, res) {
     try {
         const event = req.body;
-        // Optionally, validate required fields here
         const result = await eventModel.addEvent(event);
         res.status(201).json({ message: 'Event created successfully', event_id: result.insertId });
     } catch (error) {
@@ -195,6 +194,36 @@ async function getEventStats(req, res) {
   }
 }
 
+async function getAllEvaluationQuestions(req, res) {
+  try {
+    const questions = await eventModel.getAllEvaluationQuestions();
+    if (!questions || questions.length === 0) {
+      return res.status(404).json({ message: 'No evaluation questions found' });
+    }
+    res.status(200).json(questions);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while fetching evaluation questions.",
+    });
+  }
+}
+
+async function getEventEvaluationResponses(req, res) {
+  try {
+    const event_id = req.params.id;
+    const responses = await eventModel.getEventEvaluationResponses(event_id);
+    if (!responses || responses.length === 0) {
+      return res.status(404).json({ message: 'No evaluation responses found for this event' });
+    }
+    res.status(200).json(responses);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while fetching evaluation responses.",
+    });
+  }
+}
+
+
 module.exports = {
     addEvent,
     getEvents,
@@ -206,5 +235,7 @@ module.exports = {
     getEventsByStatus,
     approvePaidEventRegistration,
     rejectPaidEventRegistration,
-    getEventStats
+    getEventStats,
+    getAllEvaluationQuestions,
+    getEventEvaluationResponses
 };

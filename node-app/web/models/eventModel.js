@@ -150,6 +150,26 @@ async function getEventStats(event_id) {
   }
 }
 
+async function getAllEvaluationQuestions() {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query('CALL GetAllEvaluationQuestions();');
+    return rows[0]; 
+  } finally {
+    connection.release();
+  }
+}
+
+async function getEventEvaluationResponses(event_id) {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query('CALL GetEventEvaluationResponses(?);', [event_id]);
+    return rows[0];
+  } finally {
+    connection.release();
+  }
+}
+
 module.exports = {
     addEvent,
     getEvents,
@@ -162,5 +182,7 @@ module.exports = {
     getUserByEmail,
     approvePaidEventRegistration,
     rejectPaidEventRegistration,
-    getEventStats
+    getEventStats,
+    getAllEvaluationQuestions,
+    getEventEvaluationResponses
 };
