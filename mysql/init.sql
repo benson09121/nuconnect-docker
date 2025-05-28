@@ -1802,19 +1802,27 @@ DELIMITER ;
 
 DELIMITER $$
 
-CREATE DEFINER='admin'@'%' PROCEDURE UpdateApplicationPeriod()
+CREATE DEFINER='admin'@'%' PROCEDURE UpdateApplicationPeriod(
+    IN p_start_date DATE,
+    IN p_end_date DATE,
+    IN p_start_time TIME,
+    IN p_end_time TIME,
+    IN p_period_id INT
+)
 BEGIN
-  UPDATE tbl_application_period
-  SET is_active = 0
-  WHERE is_active = 1;
+    UPDATE tbl_application_period
+    SET start_date = p_start_date,
+        end_date = p_end_date,
+        start_time = p_start_time,
+        end_time = p_end_time
+    WHERE period_id = p_period_id;
+
 END $$
 DELIMITER ;
 
 DELIMITER $$
-
 CREATE DEFINER='admin'@'%' PROCEDURE InitiateApprovalProcess(IN p_application_id INT)
 BEGIN
-    -- 1. Declare variables first
     DECLARE v_org_id INT;
     DECLARE v_program_id INT;
     DECLARE v_adviser_id VARCHAR(200);
@@ -1823,8 +1831,8 @@ BEGIN
     DECLARE v_hierarchy_order INT;
     DECLARE v_approver_id VARCHAR(200);
     DECLARE done BOOLEAN DEFAULT FALSE;
+    DECLARE step_counter INT DEFAULT 0;
 
-    -- 2. Declare cursor (BEFORE handlers)
     DECLARE role_cursor CURSOR FOR
         SELECT role_id, hierarchy_order
         FROM tbl_role
@@ -1832,10 +1840,9 @@ BEGIN
         AND hierarchy_order IS NOT NULL
         ORDER BY hierarchy_order;
 
-    -- 3. Declare handler (AFTER cursors)
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
 
-    -- Get application details (executable code starts here)
+    -- Get application details
     SELECT o.organization_id, o.base_program_id, o.adviser_id, a.period_id
     INTO v_org_id, v_program_id, v_adviser_id, v_period_id
     FROM tbl_application a
@@ -1854,14 +1861,15 @@ BEGIN
 
     OPEN role_cursor;
 
-    -- Loop through approver roles
     role_loop: LOOP
         FETCH role_cursor INTO v_role_id, v_hierarchy_order;
         IF done THEN
             LEAVE role_loop;
         END IF;
 
-        -- Logic to find approvers
+        SET step_counter = step_counter + 1;
+
+        -- Find approver logic
         IF v_role_id = (SELECT role_id FROM tbl_role WHERE role_name = 'Adviser') THEN
             SET v_approver_id = v_adviser_id;
         ELSEIF v_role_id = (SELECT role_id FROM tbl_role WHERE role_name = 'ProgramChair') THEN
@@ -1877,7 +1885,7 @@ BEGIN
             LIMIT 1;
         END IF;
 
-        -- Insert approval step
+        -- Insert approval step with auto-approve first step
         IF v_approver_id IS NOT NULL THEN
             INSERT INTO tbl_approval_process (
                 organization_id,
@@ -1894,7 +1902,10 @@ BEGIN
                 v_approver_id,
                 v_role_id,
                 a.application_type,
-                'Pending',
+                CASE 
+                    WHEN step_counter = 1 THEN 'Approved'  -- Auto-approve first step
+                    ELSE 'Pending'
+                END,
                 v_hierarchy_order
             FROM tbl_application a
             WHERE a.application_id = p_application_id;
@@ -1920,11 +1931,12 @@ BEGIN
     WHERE organization_id = v_org_id
     AND period_id = v_period_id;
 
-    -- Update application status
+    -- Update application status remains as 'Pending'
     UPDATE tbl_application 
     SET status = 'Pending'
     WHERE application_id = p_application_id;
 END$$
+
 DELIMITER ;
 
 
@@ -2864,6 +2876,73 @@ END $$
 
 DELIMITER ;
 
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE CheckOrganizationName(
+    IN p_organization_name VARCHAR(100)
+)
+BEGIN
+    DECLARE v_exists INT DEFAULT 0;
+
+    -- Check if organization name exists
+    SELECT COUNT(*) INTO v_exists
+    FROM tbl_organization
+    WHERE name = p_organization_name;
+
+    IF v_exists > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Organization name already exists. Please choose a different name.';
+    END IF;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE CheckOrganizationEmails(
+    IN p_emails JSON
+)
+BEGIN
+    -- Returns { unavailable: [email1, email2, ...] }
+    -- unavailable if: not student role OR is executive in any org
+
+    DECLARE unavailable_emails JSON DEFAULT JSON_ARRAY();
+
+    -- 1. Not student role
+    SELECT JSON_ARRAYAGG(u.email)
+      INTO @not_students
+      FROM tbl_user u
+      JOIN tbl_role r ON u.role_id = r.role_id
+     WHERE JSON_CONTAINS(p_emails, JSON_QUOTE(u.email))
+       AND LOWER(r.role_name) != 'student';
+
+    -- 2. Is executive in any org
+    SELECT JSON_ARRAYAGG(u.email)
+      INTO @executives
+      FROM tbl_user u
+      JOIN tbl_organization_members om ON u.user_id = om.user_id
+     WHERE JSON_CONTAINS(p_emails, JSON_QUOTE(u.email))
+       AND om.member_type = 'Executive';
+
+    -- Merge both arrays, remove nulls
+    SET unavailable_emails = JSON_MERGE_PRESERVE(
+        COALESCE(@not_students, JSON_ARRAY()),
+        COALESCE(@executives, JSON_ARRAY())
+    );
+
+    -- Remove duplicates
+    SET unavailable_emails = (
+        SELECT JSON_ARRAYAGG(email) FROM (
+            SELECT DISTINCT jt.email
+            FROM JSON_TABLE(
+                unavailable_emails, '$[*]' COLUMNS (email VARCHAR(255) PATH '$')
+            ) jt
+        ) uniq
+    );
+
+    SELECT JSON_OBJECT('unavailable', COALESCE(unavailable_emails, JSON_ARRAY())) AS result;
+END $$
+
+DELIMITER ;
+
 -- INDEXES
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
@@ -2990,46 +3069,47 @@ INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
 -- ) VALUES
 -- (1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
 
-INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+
+-- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+-- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+-- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
 
-INSERT INTO tbl_event (
-  event_id,
-  organization_id,
-  user_id,
-  title,
-  description,
-  venue_type,
-  venue,
-  start_date,
-  end_date,
-  start_time,
-  end_time,
-  status,
-  type,
-  is_open_to,
-  fee,
-  capacity,
-  created_at,
-  certificate
-) VALUES
-(1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
+-- INSERT INTO tbl_event (
+--   event_id,
+--   organization_id,
+--   user_id,
+--   title,
+--   description,
+--   venue_type,
+--   venue,
+--   start_date,
+--   end_date,
+--   start_time,
+--   end_time,
+--   status,
+--   type,
+--   is_open_to,
+--   fee,
+--   capacity,
+--   created_at,
+--   certificate
+-- ) VALUES
+-- (1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
 
-(1002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Groove Jam 2025', 'Annual inter-school dance battle', 'Face to face', 'Open Grounds', '2025-07-20', '2025-07-20', '13:00:00', '19:00:00', 'Approved', 'Free', 'Open to all', 0, 300, '2025-05-05 10:30:00', 'Winner + Participation'),
+-- (1002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Groove Jam 2025', 'Annual inter-school dance battle', 'Face to face', 'Open Grounds', '2025-07-20', '2025-07-20', '13:00:00', '19:00:00', 'Approved', 'Free', 'Open to all', 0, 300, '2025-05-05 10:30:00', 'Winner + Participation'),
 
-(1003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Hack-It-Out', '24-hour Hackathon for IT majors', 'Face to face', 'Tech Lab 101', '2025-08-05', '2025-08-05', '08:00:00', '08:00:00', 'Pending', 'Paid', 'Members only', 200, 60, '2025-05-12 15:45:00', 'Certificate + Swag'),
+-- (1003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Hack-It-Out', '24-hour Hackathon for IT majors', 'Face to face', 'Tech Lab 101', '2025-08-05', '2025-08-05', '08:00:00', '08:00:00', 'Pending', 'Paid', 'Members only', 200, 60, '2025-05-12 15:45:00', 'Certificate + Swag'),
 
-(1004, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Earth Hour Rally', 'Tree planting and cleanup event', 'Face to face', 'Community Park', '2025-06-15', '2025-06-15', '06:30:00', '10:30:00', 'Approved', 'Free', 'Open to all', 0, 150, '2025-05-15 09:00:00', 'Eco Warrior Badge'),
+-- (1004, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Earth Hour Rally', 'Tree planting and cleanup event', 'Face to face', 'Community Park', '2025-06-15', '2025-06-15', '06:30:00', '10:30:00', 'Approved', 'Free', 'Open to all', 0, 150, '2025-05-15 09:00:00', 'Eco Warrior Badge'),
 
-(1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Rejected', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate'),
+-- (1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Rejected', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate'),
 
-(2001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Tech Expo', 'Annual technology exposition', 'Face to face', 'NU Convention Center', '2023-03-10', '2023-03-10', '08:00:00', '17:00:00', 'Approved', 'Free', 'Open to all', 0, 500, '2023-02-01 09:00:00', 'Certificate of Participation'),
+-- (2001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Tech Expo', 'Annual technology exposition', 'Face to face', 'NU Convention Center', '2023-03-10', '2023-03-10', '08:00:00', '17:00:00', 'Approved', 'Free', 'Open to all', 0, 500, '2023-02-01 09:00:00', 'Certificate of Participation'),
 
-(2002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Coding Bootcamp', 'Intensive coding bootcamp for beginners', 'Face to face', 'Lab 202', '2023-04-15', '2023-04-17', '09:00:00', '16:00:00', 'Approved', 'Paid', 'Members only', 100, 50, '2023-03-10 10:00:00', 'Certificate of Completion'),
+-- (2002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Coding Bootcamp', 'Intensive coding bootcamp for beginners', 'Face to face', 'Lab 202', '2023-04-15', '2023-04-17', '09:00:00', '16:00:00', 'Approved', 'Paid', 'Members only', 100, 50, '2023-03-10 10:00:00', 'Certificate of Completion'),
 
-(2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
+-- (2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
 
 -- -- Then insert attendance records
 -- INSERT INTO tbl_event_attendance (event_id, user_id, status, time_in, time_out) VALUES
@@ -3052,12 +3132,12 @@ INSERT INTO tbl_event (
 -- (1004, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2025-06-15 06:40:00', '2025-06-15 10:20:00'),
 -- (1004, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2025-06-15 07:00:00', NULL),
 
-INSERT INTO tbl_event_attendance (
-  event_id, user_id, status, created_at
-) VALUES (
-  9998, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
-  'Rejected', NOW()
-);
+-- INSERT INTO tbl_event_attendance (
+--   event_id, user_id, status, created_at
+-- ) VALUES (
+--   1001, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
+--   'Rejected', NOW()
+-- );
 
 -- -- For E-Sports Showdown (event_id 1005)
 -- (1005, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
@@ -3113,6 +3193,127 @@ INSERT INTO tbl_event_attendance (
 --  '{"records_processed": 932}',
 --  'system');
 
+-- INSERT INTO tbl_application_period(start_date, end_date, start_time, end_time, is_active, created_by) 
+-- VALUES(
+-- "2025-05-24",
+-- "2025-06-20",
+-- "15:24:00",
+-- "10:00:00",
+-- 1,
+-- "6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0"
+-- );
+
+-- Insert evaluation question groups
+INSERT INTO tbl_evaluation_question_group (group_title, group_description, is_active)
+VALUES 
+('Activity: Meeting/Seminar/Conference/Workshop/Quiz Bee/Competition/Sport fest, etc.', 'Question about activities', TRUE),
+('About the Speaker/Resource person', 'Feedback about event speakers/presenters', TRUE),
+('Meals', 'Feedback about meals', TRUE),
+('Handouts', 'Feedback about handouts', TRUE),
+('Transportation', 'Feedback about transportation', TRUE),
+('Comments and Suggestions', 'Feedback about the whole event', TRUE);
+
+-- Insert evaluation questions
+INSERT INTO tbl_evaluation_question (question_text, question_type, group_id, is_required)
+VALUES
+('Is the activity relevant/important to you?', 'likert_4', 1, TRUE),
+('Is the program relevant to the course/you’re in?', 'likert_4', 1, TRUE),
+('Were the objectives clear and communicated before the activity?', 'likert_4', 1, TRUE),
+('Were the objectives met by the activity?', 'likert_4', 1, TRUE),
+('Was the venue proper for this kind of activity?', 'likert_4', 1, TRUE),
+('Did the activity start and end on time?', 'likert_4', 1, TRUE),
+('Did the organizers maintain an orderly environment all throughout the activity?', 'likert_4', 1, TRUE),
+('Was the event/activity well-advertised/properly announce?', 'likert_4', 1, TRUE),
+('Would you recommend this activity to your classmates/friends?', 'likert_4', 1, TRUE),
+('Do you want an activity like this to happen more often?', 'likert_4', 1, TRUE),
+('Overall evaluation', 'likert_4', 1, TRUE),
+('Was the speaker well-prepared and knowledgeable on the topic?', 'likert_4', 2, TRUE),
+('Did the speaker use different and appropriate methods in delivering the topic?', 'likert_4', 2, TRUE),
+('Was the speaker able to connect with the audience and catch their attention?', 'likert_4', 2, TRUE),
+('Were the meals/snacks provided enough to fill you?', 'likert_4', 3, TRUE),
+('Did the meals/snacks have a pleasant taste?', 'likert_4', 3, TRUE),
+('Are the handouts provided useful?', 'likert_4', 4, TRUE),
+('Is the printing of the handouts clear?', 'likert_4', 4, TRUE),
+('Did you feel safe during the travel to the venue?', 'likert_4', 5, TRUE),
+('Did you feel that the transportation provided is in good running condition?', 'likert_4', 5, TRUE),
+('Did you feel safe with the driver’s skills?', 'likert_4', 5, TRUE),
+('What important knowledge or information did you gain from this activity?', 'textbox', 6, TRUE),
+('What did you like most about the activity?', 'textbox', 6, TRUE),
+('What did you like least about the activity?', 'textbox', 6, TRUE),
+('Any other comments/suggestions for further improvement the activity?', 'textbox', 6, TRUE);
+
+
+-- -- Link questions to our test event
+-- INSERT INTO tbl_event_evaluation_config (event_id, group_id) VALUES
+-- (1001, 1),
+-- (1001, 2),
+-- (1001, 3);
+
+-- -- Evaluation for Attendee 3 (Registered)
+-- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+-- (1001, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', '2023-11-17 18:30:00', 240);
+
+-- -- Responses for Attendee 3
+-- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+-- (1, 1, '3'), -- Relevant topics
+-- (1, 2, '4'), -- Speaker quality
+-- (1, 3, 'More hands-on workshops'), -- Future topics
+-- (1, 4, '3'), -- Venue facilities
+-- (1, 5, '2'), -- Seating comfort
+-- (1, 6, '4'), -- Overall satisfaction
+-- (1, 7, '4'), -- Would recommend
+-- (1, 8, 'Great event overall!'); -- Comments
+
+-- -- Evaluation for Attendee 6 (Registered - free event)
+-- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+-- (1001, '900f929ec408cb4', '2023-11-17 19:15:00', 180);
+
+-- -- Responses for Attendee 6
+-- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+-- (2, 1, '4'),
+-- (2, 2, '3'),
+-- (2, 3, 'More case studies'),
+-- (2, 4, '4'),
+-- (2, 5, '3'),
+-- (2, 6, '3'),
+-- (2, 7, '3'),
+-- (2, 8, 'Good content but too crowded');
+
+-- -- Evaluation for Attendee 7 (Attended)
+-- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+-- (1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2023-11-17 17:45:00', 300);
+
+-- -- Responses for Attendee 7
+-- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+-- (3, 1, '4'),
+-- (3, 2, '4'),
+-- (3, 3, 'More technical deep dives'),
+-- (3, 4, '2'),
+-- (3, 5, '1'),
+-- (3, 6, '3'),
+-- (3, 7, '3'),
+-- (3, 8, 'Seating was very uncomfortable');
+
+INSERT INTO tbl_application_requirement(
+requirement_name, 
+is_applicable_to, 
+file_path, 
+created_by, 
+created_at, 
+updated_at
+) 
+VALUES
+('Letter of Intent', 'new', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
+('Student Org Application Form', 'new', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
+('By Laws of the Organization', 'new', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
+('List of Officers/Founders', 'new', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
+('Letter from the College Dean', 'new', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
+('List of Members', 'new', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
+('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
+('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
+('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
+
+
 INSERT INTO tbl_application_period(start_date, end_date, start_time, end_time, is_active, created_by) 
 VALUES(
 "2025-05-24",
@@ -3122,71 +3323,3 @@ VALUES(
 1,
 "6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0"
 );
-
--- Insert evaluation question groups
-INSERT INTO tbl_evaluation_question_group (group_title, group_description) VALUES
-('Event Content', 'Questions about the event content and sessions'),
-('Facilities', 'Questions about the venue and facilities'),
-('Overall Experience', 'General feedback about the event');
-
--- Insert evaluation questions
-INSERT INTO tbl_evaluation_question (group_id, question_text, question_type) VALUES
-(1, 'How relevant were the topics to your interests?', 'likert_4'),
-(1, 'How would you rate the quality of the speakers?', 'likert_4'),
-(1, 'What topics would you like to see in future events?', 'textbox'),
-(2, 'How would you rate the venue facilities?', 'likert_4'),
-(2, 'Was the seating comfortable?', 'likert_4'),
-(3, 'Overall, how satisfied were you with the event?', 'likert_4'),
-(3, 'Would you recommend this event to others?', 'likert_4'),
-(3, 'Any additional comments or suggestions?', 'textbox');
-
--- Link questions to our test event
-INSERT INTO tbl_event_evaluation_config (event_id, group_id) VALUES
-(9998, 1),
-(9998, 2),
-(9998, 3);
-
--- Evaluation for Attendee 3 (Registered)
-INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
-(9998, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', '2023-11-17 18:30:00', 240);
-
--- Responses for Attendee 3
-INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
-(1, 1, '3'), -- Relevant topics
-(1, 2, '4'), -- Speaker quality
-(1, 3, 'More hands-on workshops'), -- Future topics
-(1, 4, '3'), -- Venue facilities
-(1, 5, '2'), -- Seating comfort
-(1, 6, '4'), -- Overall satisfaction
-(1, 7, '4'), -- Would recommend
-(1, 8, 'Great event overall!'); -- Comments
-
--- Evaluation for Attendee 6 (Registered - free event)
-INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
-(9998, '900f929ec408cb4', '2023-11-17 19:15:00', 180);
-
--- Responses for Attendee 6
-INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
-(2, 1, '4'),
-(2, 2, '3'),
-(2, 3, 'More case studies'),
-(2, 4, '4'),
-(2, 5, '3'),
-(2, 6, '3'),
-(2, 7, '3'),
-(2, 8, 'Good content but too crowded');
-
--- Evaluation for Attendee 7 (Attended)
-INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
-(9998, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2023-11-17 17:45:00', 300);
-
--- Responses for Attendee 7
-INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
-(3, 1, '4'),
-(3, 2, '4'),
-(3, 3, 'More technical deep dives'),
-(3, 4, '2'),
-(3, 5, '1'),
-(3, 6, '3'),
-(3, 7, '3'),
-(3, 8, 'Seating was very uncomfortable');

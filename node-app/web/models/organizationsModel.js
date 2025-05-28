@@ -69,10 +69,38 @@ async function getOrganizationApplications() {
         connection.release();
     }
 }
+
+ async function checkOrganizationName(org_name) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL CheckOrganizationName(?);', [org_name]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error checking organization name:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+    
+ }
+ async function checkOrganizationEmails(org_emails) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL CheckOrganizationEmails(?);', [org_emails]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error checking organization emails:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
 module.exports = {
     createOrganizationApplication,
     getSpecificApplication,
     approveApplication,
     rejectApplication,
-    getOrganizationApplications
+    getOrganizationApplications,
+    checkOrganizationName
 };

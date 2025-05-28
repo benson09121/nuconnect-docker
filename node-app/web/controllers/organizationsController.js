@@ -200,6 +200,30 @@ async function getOrganizationApplications(req, res) {
     }
 }
 
+async function checkOrganizationName(req, res) {
+    try {
+        const { org_name } = req.query;
+        const exists = await organizationsModel.checkOrganizationName(org_name);
+        res.json({ exists });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while checking the organization name.",
+        });
+    }
+}
+
+async function checkOrganizationEmails(req, res) {
+    try {
+        const { emails } = req.body;
+        const exists = await organizationsModel.checkOrganizationEmails(emails);
+        res.json({ exists });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while checking the organization emails.",
+        });
+    }
+}
+
 
 module.exports = {
     getOrganizations,
@@ -209,5 +233,6 @@ module.exports = {
     rejectApplication,
     getOrganizationRequirement,
     getOrganizationLogo,
-    getOrganizationApplications
+    getOrganizationApplications,
+    checkOrganizationName
 };
