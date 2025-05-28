@@ -12,6 +12,6 @@ router.post('/reject-application', middleware.validateAzureJWT, organizationsCon
 router.get('/getOrganizationRequirement', middleware.validateAzureJWT, organizationsController.getOrganizationRequirement);
 router.get('/getOrganizationLogo', middleware.validateAzureJWT, organizationsController.getOrganizationLogo);
 router.get('/check-org-name',middleware.validateAzureJWT, organizationsController.checkOrganizationName);
-router.get('/check-org-emails', middleware.validateAzureJWT, organizationsController.checkOrganizationEmails);
+router.post('/check-org-emails', middleware.validateAzureJWT, organizationsController.checkOrganizationEmails);
 
 module.exports = router;

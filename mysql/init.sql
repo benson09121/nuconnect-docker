@@ -266,7 +266,6 @@ CREATE TABLE tbl_event (
     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
 );
 
--- 1. Event Application Table
 CREATE TABLE tbl_event_application (
     event_application_id INT AUTO_INCREMENT PRIMARY KEY,
     organization_id INT NOT NULL,
@@ -282,18 +281,16 @@ CREATE TABLE tbl_event_application (
     FOREIGN KEY (proposed_event_id) REFERENCES tbl_event(event_id)
 );
 
--- 2. Event Application Requirements (Templates from SDAO)
 CREATE TABLE tbl_event_application_requirement (
     requirement_id INT AUTO_INCREMENT PRIMARY KEY,
     requirement_name VARCHAR(255) NOT NULL,
-    description TEXT,
-    file_template_path VARCHAR(255) NOT NULL,
-    is_mandatory BOOLEAN DEFAULT TRUE,
-    created_by VARCHAR(200) NOT NULL, -- SDAO user
+    is_applicable_to ENUM('pre-event', 'post-event') DEFAULT 'pre-event',
+    file_path VARCHAR(255) NULL,
+    created_by VARCHAR(200) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (created_by) REFERENCES tbl_user(user_id)
 );
-
 -- 3. Event Application Approval Process
 CREATE TABLE tbl_event_approval_process (
     event_approval_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -310,35 +307,23 @@ CREATE TABLE tbl_event_approval_process (
     FOREIGN KEY (approval_role_id) REFERENCES tbl_role(role_id)
 );
 
--- 4. Event Application Submissions (Org responses)
+
 CREATE TABLE tbl_event_application_submission (
     submission_id INT AUTO_INCREMENT PRIMARY KEY,
-    event_application_id INT NOT NULL,
+    event_application_id INT,
     requirement_id INT NOT NULL,
-    submitted_file_path VARCHAR(255) NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
     submitted_by VARCHAR(200) NOT NULL,
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (event_application_id) 
-        REFERENCES tbl_event_application(event_application_id),
-    FOREIGN KEY (requirement_id) 
-        REFERENCES tbl_event_application_requirement(requirement_id),
+    FOREIGN KEY (event_application_id) REFERENCES tbl_event_application(event_application_id),
+    FOREIGN KEY (requirement_id) REFERENCES tbl_event_application_requirement(requirement_id),
     FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id)
-);
-
-CREATE TABLE tbl_event_requirements(
-    requirement_id INT AUTO_INCREMENT PRIMARY KEY,
-    requirement_type ENUM('PRE-EVENT', 'POST-EVENT') NOT NULL,
-    requirement_name VARCHAR(255) NOT NULL,
-    requirement_file_path VARCHAR(255) NOT NULL,
-    created_by VARCHAR(200) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
-
 );
 
 CREATE TABLE tbl_event_requirement_submissions (
     submission_id INT AUTO_INCREMENT PRIMARY KEY,
     event_id INT,
+    event_application_id INT,
     requirement_id INT NOT NULL,
     cycle_number INT NOT NULL,
     organization_id INT NOT NULL,
@@ -346,7 +331,8 @@ CREATE TABLE tbl_event_requirement_submissions (
     submitted_by VARCHAR(200) NOT NULL,
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id),
-    FOREIGN KEY (requirement_id) REFERENCES tbl_event_requirements(requirement_id),
+    FOREIGN KEY (event_application_id) REFERENCES tbl_event_application(event_application_id),
+    FOREIGN KEY (requirement_id) REFERENCES tbl_event_application_requirement(requirement_id),
     FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id),
     FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
 );
@@ -2911,7 +2897,7 @@ BEGIN
       INTO @not_students
       FROM tbl_user u
       JOIN tbl_role r ON u.role_id = r.role_id
-     WHERE JSON_CONTAINS(p_emails, JSON_QUOTE(u.email))
+     WHERE JSON_CONTAINS(p_emails, CAST(u.email AS JSON))
        AND LOWER(r.role_name) != 'student';
 
     -- 2. Is executive in any org
@@ -2919,7 +2905,7 @@ BEGIN
       INTO @executives
       FROM tbl_user u
       JOIN tbl_organization_members om ON u.user_id = om.user_id
-     WHERE JSON_CONTAINS(p_emails, JSON_QUOTE(u.email))
+     WHERE JSON_CONTAINS(p_emails, CAST(u.email AS JSON))
        AND om.member_type = 'Executive';
 
     -- Merge both arrays, remove nulls

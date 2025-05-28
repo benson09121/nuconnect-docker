@@ -102,5 +102,6 @@ module.exports = {
     approveApplication,
     rejectApplication,
     getOrganizationApplications,
-    checkOrganizationName
+    checkOrganizationName,
+    checkOrganizationEmails
 };
