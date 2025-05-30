@@ -1845,7 +1845,8 @@ BEGIN
                     'status', a.status,
                     'created_at', a.created_at,
                     'updated_at', a.updated_at,
-                    'organization_name', o.name
+                    'organization_name', o.name,
+                    'category', o.category
                 )
             )
             FROM tbl_application a
@@ -3360,7 +3361,7 @@ INSERT INTO tbl_program (name, description) VALUES
 ("Bachelor of Science in Computer Science", "BSCS");
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
-("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 1),
+("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 5),
 ("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 6),
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
