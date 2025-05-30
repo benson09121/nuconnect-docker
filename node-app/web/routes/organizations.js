@@ -13,5 +13,7 @@ router.get('/getOrganizationRequirement', middleware.validateAzureJWT, organizat
 router.get('/getOrganizationLogo', middleware.validateAzureJWT, organizationsController.getOrganizationLogo);
 router.get('/check-org-name',middleware.validateAzureJWT, organizationsController.checkOrganizationName);
 router.post('/check-org-emails', middleware.validateAzureJWT, organizationsController.checkOrganizationEmails);
+router.post('/archive-organization', middleware.validateAzureJWT, middleware.hasPermission("ARCHIVE_ORGANIZATION"), organizationsController.archiveOrganization);
+router.post('/unarchive-organization', middleware.validateAzureJWT, middleware.hasPermission("ARCHIVE_ORGANIZATION"), organizationsController.unarchiveOrganization);
 
 module.exports = router;

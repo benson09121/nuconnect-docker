@@ -172,6 +172,31 @@ async function updateRequirement(req, res) {
     }
 }
 
+async function getAllPeriodsWithApplications(req, res) {
+    try {
+        const periods = await requirementModel.getAllPeriodsWithApplications();
+        res.json(periods);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching periods with applications.",
+        });
+    }
+}
+
+async function getActiveApplicationPeriodSimple(req, res) {
+    try {
+        const period = await requirementModel.getActiveApplicationPeriodSimple();
+        if (!period || period.length === 0) {
+            return res.status(404).json({ message: 'No active application period found.' });
+        }
+        res.json(period);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the active application period.",
+        });
+    }
+}
+
 async function getActiveApplicationPeriod(req, res) {
     try {
         const activePeriod = await requirementModel.getActiveApplicationPeriod();
@@ -198,6 +223,22 @@ async function updateApplicationPeriod(req, res) {
     }
 }
 
+async function terminateActiveApplicationPeriod(req, res) {
+    try {
+        // Use model to look up user by email
+        const user = await requirementModel.getUserByEmail(req.user.email);
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        await requirementModel.terminateActiveApplicationPeriod(user.user_id);
+        res.status(200).json({ message: 'Active application period terminated successfully.' });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while terminating the active application period.",
+        });
+    }
+}
+
 module.exports = {
     addRequirement,
     getRequirements,
@@ -205,6 +246,9 @@ module.exports = {
     deleteRequirement,
     updateRequirement,
     addApplicationPeriod,
+    getAllPeriodsWithApplications,
+    getActiveApplicationPeriodSimple,
     getActiveApplicationPeriod,
-    updateApplicationPeriod
+    updateApplicationPeriod,
+    terminateActiveApplicationPeriod 
 }

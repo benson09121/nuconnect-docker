@@ -27,7 +27,6 @@ async function saveEventRequirements(req, res) {
   try {
     let { user_id, user_email, requirements } = req.body;
 
-    // If user_id is not provided but user_email is, look up user_id
     if (!user_id && user_email) {
       const user = await eventModel.getUserByEmail(user_email);
       if (!user) {
