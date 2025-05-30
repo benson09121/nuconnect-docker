@@ -117,6 +117,11 @@ async function getOrganizationDetails(org_name){
         return rows[0];
     } catch (error) {
         console.error('Error fetching organization details:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
       
 async function getUserByEmail(email) {
     const connection = await pool.getConnection();
