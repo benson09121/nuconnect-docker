@@ -67,7 +67,7 @@ CREATE TABLE tbl_organization(
     description TEXT,
     base_program_id INT NULL, -- NULL meaning open to all
     logo VARCHAR(255),
-    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal') DEFAULT 'Pending',
+    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal', 'Archived') DEFAULT 'Pending',
     membership_fee_type ENUM('Per Term', 'Whole Academic Year',"Free") NOT NULL DEFAULT 'Free',
     category ENUM('Co-Curricular Organization', 'Extra Curricular Organization') DEFAULT 'Co-Curricular Organization',
     membership_fee_amount DECIMAL(10,2) NULL,
@@ -949,6 +949,106 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationsByStatus(
+    IN p_status ENUM('Pending', 'Approved', 'Rejected', 'Renewal', 'Archived')
+)
+BEGIN
+    SELECT 
+        o.organization_id,
+        o.adviser_id,
+        o.name AS organization_name,
+        o.description,
+        o.base_program_id,
+        o.logo,
+        o.status,
+        o.membership_fee_type,
+        o.membership_fee_amount,
+        o.is_recruiting,
+        o.is_open_to_all_courses,
+        o.category,
+        o.created_at,
+        -- Main/base program (if any)
+        p.program_id AS base_program_id,
+        p.name AS base_program_name,
+        p.description AS base_program_description,
+        -- All additional programs (if any, as JSON array)
+        (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'program_id', pr.program_id,
+                    'program_name', pr.name,
+                    'program_description', pr.description
+                )
+            )
+            FROM tbl_organization_course oc
+            JOIN tbl_program pr ON oc.program_id = pr.program_id
+            WHERE oc.organization_id = o.organization_id
+        ) AS additional_programs
+    FROM tbl_organization o
+    LEFT JOIN tbl_program p ON o.base_program_id = p.program_id
+    WHERE o.status = p_status
+    ORDER BY o.created_at DESC;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE ArchiveOrganization(
+    IN p_organization_id INT,
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    -- Update organization status to 'Archived'
+    UPDATE tbl_organization
+    SET status = 'Archived'
+    WHERE organization_id = p_organization_id;
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type,
+        meta_data
+    ) VALUES (
+        p_user_id,
+        CONCAT('Archived organization ID ', p_organization_id),
+        'organization',
+        JSON_OBJECT('organization_id', p_organization_id, 'archived_at', NOW())
+    );
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE UnarchiveOrganization(
+    IN p_organization_id INT,
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    -- Unarchive organization (set status to 'Approved', or change as needed)
+    UPDATE tbl_organization
+    SET status = 'Approved'
+    WHERE organization_id = p_organization_id
+      AND status = 'Archived';
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type,
+        meta_data
+    ) VALUES (
+        p_user_id,
+        CONCAT('Unarchived organization ID ', p_organization_id),
+        'organization',
+        JSON_OBJECT('organization_id', p_organization_id, 'unarchived_at', NOW())
+    );
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetUpcomingEvents(IN p_user_id VARCHAR(200))
 BEGIN
     WITH UserOrganizations AS (
@@ -1762,6 +1862,58 @@ DELIMITER ;
 
 DELIMITER $$
 
+CREATE DEFINER='admin'@'%' PROCEDURE GetAllPeriodsWithApplications()
+BEGIN
+    SELECT 
+        ap.period_id,
+        ap.start_date,
+        ap.end_date,
+        ap.start_time,
+        ap.end_time,
+        ap.is_active,
+        ap.created_by,
+        ap.created_at,
+        ap.updated_at,
+        (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'application_id', a.application_id,
+                    'organization_id', a.organization_id,
+                    'cycle_number', a.cycle_number,
+                    'application_type', a.application_type,
+                    'applicant_user_id', a.applicant_user_id,
+                    'status', a.status,
+                    'created_at', a.created_at,
+                    'updated_at', a.updated_at,
+                    'organization_name', o.name,
+                    'category', o.category
+                )
+            )
+            FROM tbl_application a
+            LEFT JOIN tbl_organization o ON a.organization_id = o.organization_id
+            WHERE a.period_id = ap.period_id
+        ) AS applications
+    FROM tbl_application_period ap
+    ORDER BY ap.start_date DESC, ap.period_id DESC;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetActiveApplicationPeriodSimple()
+BEGIN
+    SELECT *
+    FROM tbl_application_period
+    WHERE is_active = 1
+    ORDER BY created_at DESC
+    LIMIT 1;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
 CREATE DEFINER='admin'@'%' PROCEDURE GetActiveApplicationPeriod()
 BEGIN
   DECLARE currentDate DATE;
@@ -1803,6 +1955,41 @@ BEGIN
     WHERE period_id = p_period_id;
 
 END $$
+DELIMITER ;
+
+DELIMITER $$
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE TerminateActiveApplicationPeriod(
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    DECLARE v_affected_rows INT DEFAULT 0;
+
+    -- Terminate all currently active periods
+    UPDATE tbl_application_period
+    SET is_active = 0
+    WHERE is_active = 1;
+
+    SET v_affected_rows = ROW_COUNT();
+
+    -- Log the action if any period was terminated
+    IF v_affected_rows > 0 THEN
+        INSERT INTO tbl_logs (
+            user_id,
+            action,
+            type,
+            meta_data
+        ) VALUES (
+            p_user_id,
+            'Terminated active application period(s)',
+            'application_period',
+            JSON_OBJECT('terminated_count', v_affected_rows, 'terminated_at', NOW())
+        );
+    END IF;
+END $$
+
 DELIMITER ;
 
 DELIMITER $$
@@ -2746,6 +2933,122 @@ END$$
 
 DELIMITER ;
 
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventRequirements()
+BEGIN
+    SELECT * FROM tbl_event_application_requirement;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE SaveEventRequirements(
+    IN p_user_id VARCHAR(200),
+    IN p_requirements JSON
+)
+BEGIN
+    DECLARE i INT DEFAULT 0;
+    DECLARE req_count INT;
+    DECLARE v_req_id INT;
+    DECLARE v_req_name VARCHAR(255);
+    DECLARE v_req_type ENUM('pre-event', 'post-event');
+    DECLARE v_file_path VARCHAR(255);
+
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE del_req_id INT;
+    DECLARE del_req_name VARCHAR(255);
+    DECLARE del_cursor CURSOR FOR SELECT requirement_id FROM tmp_existing_ids;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    -- 1. Collect all current requirement_ids
+    DROP TEMPORARY TABLE IF EXISTS tmp_existing_ids;
+    CREATE TEMPORARY TABLE IF NOT EXISTS tmp_existing_ids (requirement_id INT PRIMARY KEY);
+    INSERT INTO tmp_existing_ids (requirement_id)
+        SELECT requirement_id FROM tbl_event_application_requirement;
+
+    SET req_count = JSON_LENGTH(p_requirements);
+
+    -- 2. Add or update requirements
+    WHILE i < req_count DO
+        SET v_req_id = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_id')));
+        SET v_req_name = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_name')));
+        SET v_req_type = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].is_applicable_to')));
+        SET v_file_path = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].file_path')));
+
+        IF v_req_id IS NULL OR v_req_id = '' OR v_req_id = 'null' THEN
+            -- Add new requirement
+            INSERT INTO tbl_event_application_requirement (
+                requirement_name, is_applicable_to, file_path, created_by
+            ) VALUES (
+                v_req_name, v_req_type, v_file_path, p_user_id
+            );
+
+            -- Log add
+            INSERT INTO tbl_logs (user_id, action, type, meta_data)
+            VALUES (
+                p_user_id,
+                CONCAT('Added event requirement: ', v_req_name),
+                'event_requirement',
+                JSON_OBJECT('requirement_name', v_req_name, 'is_applicable_to', v_req_type)
+            );
+        ELSE
+            -- Update existing requirement
+            UPDATE tbl_event_application_requirement
+            SET requirement_name = v_req_name,
+                is_applicable_to = v_req_type,
+                file_path = v_file_path,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE requirement_id = v_req_id;
+
+            -- Log update
+            INSERT INTO tbl_logs (user_id, action, type, meta_data)
+            VALUES (
+                p_user_id,
+                CONCAT('Updated event requirement: ', v_req_name),
+                'event_requirement',
+                JSON_OBJECT('requirement_id', v_req_id, 'requirement_name', v_req_name, 'is_applicable_to', v_req_type)
+            );
+        END IF;
+
+        -- Remove from deletion candidates
+        IF v_req_id IS NOT NULL AND v_req_id != '' THEN
+            DELETE FROM tmp_existing_ids WHERE requirement_id = v_req_id;
+        END IF;
+
+        SET i = i + 1;
+    END WHILE;
+
+    -- 3. Delete requirements not in the new list and log deletions
+    OPEN del_cursor;
+    del_loop: LOOP
+        FETCH del_cursor INTO del_req_id;
+        IF done THEN
+            LEAVE del_loop;
+        END IF;
+
+        -- Get name for logging
+        SELECT requirement_name INTO del_req_name FROM tbl_event_application_requirement WHERE requirement_id = del_req_id;
+
+        DELETE FROM tbl_event_application_requirement WHERE requirement_id = del_req_id;
+
+        -- Log deletion
+        INSERT INTO tbl_logs (user_id, action, type, meta_data)
+        VALUES (
+            p_user_id,
+            CONCAT('Deleted event requirement: ', del_req_name),
+            'event_requirement',
+            JSON_OBJECT('requirement_id', del_req_id, 'requirement_name', del_req_name)
+        );
+    END LOOP;
+    CLOSE del_cursor;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_existing_ids;
+END $$
+
+DELIMITER ;
+
 -- Procedure to get event statistics
 DELIMITER $$
 
@@ -2850,37 +3153,57 @@ END $$
 
 DELIMITER ;
 
+    -- Get all evaluation responses grouped by question group
 DELIMITER $$
 
-CREATE DEFINER='admin'@'%' PROCEDURE GetEventEvaluationResponses(
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventEvaluationResponsesByGroup(
     IN p_event_id INT
 )
 BEGIN
-    -- Get all evaluation responses for the specified event
     SELECT 
-        u.user_id,
-        CONCAT(u.f_name, ' ', u.l_name) AS attendee_name,
-        qg.group_title,
-        q.question_id,
-        q.question_text,
-        q.question_type,
-        r.response_value,
-        r.created_at AS response_time,
-        e.submitted_at AS evaluation_submission_time
+        JSON_ARRAYAGG(
+            JSON_OBJECT(
+                'group_title', qg.group_title,
+                'group_description', qg.group_description,
+                'questions', (
+                    SELECT JSON_ARRAYAGG(
+                        JSON_OBJECT(
+                            'question_id', q.question_id,
+                            'question_text', q.question_text,
+                            'question_type', q.question_type,
+                            'responses', (
+                                SELECT JSON_ARRAYAGG(
+                                    JSON_OBJECT(
+                                        'user_id', u.user_id,
+                                        'attendee_name', CONCAT(u.f_name, ' ', u.l_name),
+                                        'response_value', r.response_value,
+                                        'response_time', r.created_at
+                                    )
+                                )
+                                FROM tbl_evaluation_response r
+                                JOIN tbl_evaluation e ON r.evaluation_id = e.evaluation_id
+                                JOIN tbl_user u ON e.user_id = u.user_id
+                                WHERE r.question_id = q.question_id
+                                AND e.event_id = p_event_id
+                            )
+                        )
+                    )
+                    FROM tbl_evaluation_question q
+                    WHERE q.group_id = qg.group_id
+                )
+            )
+        ) AS evaluation_responses
     FROM 
-        tbl_evaluation e
-    JOIN 
-        tbl_user u ON e.user_id = u.user_id
-    JOIN 
-        tbl_evaluation_response r ON e.evaluation_id = r.evaluation_id
-    JOIN 
-        tbl_evaluation_question q ON r.question_id = q.question_id
-    JOIN 
-        tbl_evaluation_question_group qg ON q.group_id = qg.group_id
+        tbl_evaluation_question_group qg
     WHERE 
-        e.event_id = p_event_id
+        EXISTS (
+            SELECT 1
+            FROM tbl_event_evaluation_config ec
+            WHERE ec.event_id = p_event_id
+            AND ec.group_id = qg.group_id
+        )
     ORDER BY 
-        u.l_name, u.f_name, qg.group_id, q.question_id;
+        qg.group_id;
 END $$
 
 DELIMITER ;
@@ -3231,6 +3554,7 @@ VALUES
 (4,2),
 (4,3),
 (4,4),
+(4,8),
 (4,9),
 (4,10),
 (4,15),
@@ -3247,7 +3571,7 @@ INSERT INTO tbl_program (name, description) VALUES
 ("Bachelor of Science in Computer Science", "BSCS");
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
-("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 1),
+("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 5),
 ("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 6),
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
@@ -3266,34 +3590,21 @@ INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, st
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
--- -- Insert events first
--- INSERT INTO tbl_event (
---   event_id,
---   organization_id,
---   user_id,
---   title,
---   description,
---   venue_type,
---   venue,
---   start_date,
---   end_date,
---   start_time,
---   end_time,
---   status,
---   type,
---   is_open_to,
---   fee,
---   capacity,
---   created_at,
---   certificate
--- ) VALUES
--- (1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
-
-
--- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
--- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
--- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
-
+INSERT INTO tbl_event_application_requirement (
+    requirement_name,
+    is_applicable_to,
+    file_path,
+    created_by,
+    created_at,
+    updated_at
+) VALUES
+('Event Proposal Form', 'pre-event', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
+('Program Flow', 'pre-event', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
+('Budget Proposal', 'pre-event', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
+('Attendance Sheet', 'post-event', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
+('Event Photos', 'post-event', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
+('Narrative Report', 'post-event', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
+('Financial Report', 'post-event', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30');
 
 INSERT INTO tbl_event (
   event_id,
@@ -3455,57 +3766,218 @@ VALUES
 ('What did you like least about the activity?', 'textbox', 6, TRUE),
 ('Any other comments/suggestions for further improvement the activity?', 'textbox', 6, TRUE);
 
+INSERT INTO tbl_event_attendance (event_id, user_id, status, time_in, time_out) VALUES
+-- For Innovation Pitch Fest (event_id 1001)
+(1001, '900f929ec408cb4', 'Attended', '2025-06-10 08:55:23', '2025-06-10 15:05:45'),
+(1001, '5fb95ed0a0d20daf', 'Evaluated', '2025-06-10 09:10:12', '2025-06-10 15:00:30'),
+(1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Pending', '2025-06-10 09:30:00', NULL),
 
--- -- Link questions to our test event
--- INSERT INTO tbl_event_evaluation_config (event_id, group_id) VALUES
--- (1001, 1),
--- (1001, 2),
--- (1001, 3);
+-- For Groove Jam 2025 (event_id 1002)
+(1002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Registered', NULL, NULL),
+(1002, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Pending', NULL, NULL),
 
--- -- Evaluation for Attendee 3 (Registered)
--- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
--- (1001, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', '2023-11-17 18:30:00', 240);
+-- For Hack-It-Out (event_id 1003)
+(1003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
+(1003, '900f929ec408cb4', 'Registered', NULL, NULL),
 
--- -- Responses for Attendee 3
--- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
--- (1, 1, '3'), -- Relevant topics
--- (1, 2, '4'), -- Speaker quality
--- (1, 3, 'More hands-on workshops'), -- Future topics
--- (1, 4, '3'), -- Venue facilities
--- (1, 5, '2'), -- Seating comfort
--- (1, 6, '4'), -- Overall satisfaction
--- (1, 7, '4'), -- Would recommend
--- (1, 8, 'Great event overall!'); -- Comments
+-- For Earth Hour Rally (event_id 1004)
+(1004, '5fb95ed0a0d20daf', 'Attended', '2025-06-15 06:25:00', '2025-06-15 10:35:00'),
+(1004, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2025-06-15 06:40:00', '2025-06-15 10:20:00'),
+(1004, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2025-06-15 07:00:00', NULL),
 
--- -- Evaluation for Attendee 6 (Registered - free event)
--- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
--- (1001, '900f929ec408cb4', '2023-11-17 19:15:00', 180);
+-- For E-Sports Showdown (event_id 1005)
+(1005, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
+(1005, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
 
--- -- Responses for Attendee 6
--- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
--- (2, 1, '4'),
--- (2, 2, '3'),
--- (2, 3, 'More case studies'),
--- (2, 4, '4'),
--- (2, 5, '3'),
--- (2, 6, '3'),
--- (2, 7, '3'),
--- (2, 8, 'Good content but too crowded');
+-- For 2023 Tech Expo (event_id 2001)
+(2001, '900f929ec408cb4', 'Attended', '2023-03-10 07:45:00', '2023-03-10 17:15:00'),
+(2001, '5fb95ed0a0d20daf', 'Attended', '2023-03-10 08:10:00', '2023-03-10 16:50:00'),
 
--- -- Evaluation for Attendee 7 (Attended)
--- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
--- (1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2023-11-17 17:45:00', 300);
+-- For 2023 Coding Bootcamp (event_id 2002)
+(2002, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2023-04-15 08:30:00', '2023-04-17 16:00:00'),
+(2002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2023-04-15 09:00:00', NULL),
 
--- -- Responses for Attendee 7
--- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
--- (3, 1, '4'),
--- (3, 2, '4'),
--- (3, 3, 'More technical deep dives'),
--- (3, 4, '2'),
--- (3, 5, '1'),
--- (3, 6, '3'),
--- (3, 7, '3'),
--- (3, 8, 'Seating was very uncomfortable');
+-- For 2023 Summer Seminar (event_id 2003)
+(2003, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
+(2003, '900f929ec408cb4', 'Attended', '2023-05-05 09:45:00', '2023-05-05 12:15:00');
+
+-- First, ensure the event-group mappings exist in tbl_event_evaluation_config
+INSERT INTO tbl_event_evaluation_config (event_id, group_id) VALUES
+-- For Innovation Pitch Fest (1001)
+(1001, 1), (1001, 2), (1001, 3), (1001, 4), (1001, 5), (1001, 6),
+-- For Earth Hour Rally (1004)
+(1004, 1), (1004, 3), (1004, 6),
+-- For 2023 Tech Expo (2001)
+(2001, 1), (2001, 2), (2001, 4), (2001, 6);
+
+-- Insert evaluations for event 1001 (Innovation Pitch Fest)
+INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+(1001, '900f929ec408cb4', '2025-06-10 15:10:00', 420),
+(1001, '5fb95ed0a0d20daf', '2025-06-10 15:05:00', 380);
+
+-- Responses for Benson Javier (user_id: 900f929ec408cb4) for event 1001
+-- Group 1: Activity questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(1, 1, '4'), (1, 2, '4'), (1, 3, '4'), (1, 4, '4'), (1, 5, '4'), 
+(1, 6, '3'), (1, 7, '4'), (1, 8, '4'), (1, 9, '4'), (1, 10, '4'), (1, 11, '4');
+
+-- Group 2: Speaker questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(1, 12, '4'), (1, 13, '4'), (1, 14, '4');
+
+-- Group 3: Meals questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(1, 15, '4'), (1, 16, '4');
+
+-- Group 4: Handouts questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(1, 17, '4'), (1, 18, '4');
+
+-- Group 5: Transportation questions (marked as not applicable)
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(1, 19, '3'), (1, 20, '3'), (1, 21, '3');
+
+-- Group 6: Comments and Suggestions (text responses)
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(1, 22, 'Learned about innovative ideas from different teams'),
+(1, 23, 'The competition format was engaging'),
+(1, 24, 'Some presentations ran too long'),
+(1, 25, 'Maybe have stricter time limits for pitches next time');
+
+-- Responses for Geraldine Aris (user_id: 5fb95ed0a0d20daf) for event 1001
+-- Group 1: Activity questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(2, 1, '3'), (2, 2, '3'), (2, 3, '4'), (2, 4, '3'), (2, 5, '4'), 
+(2, 6, '2'), (2, 7, '4'), (2, 8, '3'), (2, 9, '3'), (2, 10, '3'), (2, 11, '3');
+
+-- Group 2: Speaker questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(2, 12, '4'), (2, 13, '3'), (2, 14, '4');
+
+-- Group 3: Meals questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(2, 15, '3'), (2, 16, '4');
+
+-- Group 4: Handouts questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(2, 17, '3'), (2, 18, '4');
+
+-- Group 5: Transportation questions (marked as not applicable)
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(2, 19, '1'), (2, 20, '1'), (2, 21, '1');
+
+-- Group 6: Comments and Suggestions (text responses)
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(2, 22, 'Interesting to see different approaches to problem solving'),
+(2, 23, 'The judging criteria were well explained'),
+(2, 24, 'Some technical difficulties with presentations'),
+(2, 25, 'Better AV setup would improve the experience');
+
+-- Insert evaluations for event 1004 (Earth Hour Rally)
+INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+(1004, '5fb95ed0a0d20daf', '2025-06-15 10:40:00', 300),
+(1004, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-06-15 10:35:00', 280),
+(1004, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2025-06-15 10:30:00', 250);
+
+-- Responses for Earth Hour Rally (only groups 1, 3, and 6 as per event config)
+-- Geraldine Aris (user_id: 5fb95ed0a0d20daf)
+-- Group 1: Activity questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(3, 1, '4'), (3, 2, '4'), (3, 3, '4'), (3, 4, '4'), (3, 5, '4'), 
+(3, 6, '4'), (3, 7, '4'), (3, 8, '4'), (3, 9, '4'), (3, 10, '4'), (3, 11, '4');
+
+-- Group 3: Meals questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(3, 15, '4'), (3, 16, '4');
+
+-- Group 6: Comments and Suggestions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(3, 22, 'Learned practical ways to help the environment'),
+(3, 23, 'The hands-on activities were very engaging'),
+(3, 24, 'Could have provided more water stations'),
+(3, 25, 'More events like this please!');
+
+-- Benson Javier (student) (user_id: 6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0)
+-- Group 1: Activity questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(4, 1, '3'), (4, 2, '3'), (4, 3, '4'), (4, 4, '3'), (4, 5, '4'), 
+(4, 6, '3'), (4, 7, '4'), (4, 8, '3'), (4, 9, '4'), (4, 10, '3'), (4, 11, '3');
+
+-- Group 3: Meals questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(4, 15, '3'), (4, 16, '3');
+
+-- Group 6: Comments and Suggestions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(4, 22, 'Good to learn about local environmental issues'),
+(4, 23, 'The tree planting was my favorite part'),
+(4, 24, 'It was very hot during the cleanup'),
+(4, 25, 'Maybe schedule earlier in the morning during summer');
+
+-- Carl Falcon (user_id: cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k)
+-- Group 1: Activity questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(5, 1, '4'), (5, 2, '4'), (5, 3, '4'), (5, 4, '4'), (5, 5, '4'), 
+(5, 6, '4'), (5, 7, '4'), (5, 8, '4'), (5, 9, '4'), (5, 10, '4'), (5, 11, '4');
+
+-- Group 3: Meals questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(5, 15, '4'), (5, 16, '4');
+
+-- Group 6: Comments and Suggestions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(5, 22, 'Valuable experience in community service'),
+(5, 23, 'Well-organized event with clear instructions'),
+(5, 24, 'More shade would have been nice'),
+(5, 25, 'Consider providing hats or caps for participants');
+
+-- Insert evaluations for event 2001 (2023 Tech Expo)
+INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
+(2001, '900f929ec408cb4', '2023-03-10 17:20:00', 350),
+(2001, '5fb95ed0a0d20daf', '2023-03-10 17:00:00', 320);
+
+-- Responses for 2023 Tech Expo (groups 1, 2, 4, and 6 as per event config)
+-- Benson Javier (user_id: 900f929ec408cb4)
+-- Group 1: Activity questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(6, 1, '4'), (6, 2, '4'), (6, 3, '4'), (6, 4, '4'), (6, 5, '4'), 
+(6, 6, '4'), (6, 7, '4'), (6, 8, '4'), (6, 9, '4'), (6, 10, '4'), (6, 11, '4');
+
+-- Group 2: Speaker questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(6, 12, '4'), (6, 13, '4'), (6, 14, '4');
+
+-- Group 4: Handouts questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(6, 17, '4'), (6, 18, '4');
+
+-- Group 6: Comments and Suggestions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(6, 22, 'Saw many emerging technologies that will be useful for my studies'),
+(6, 23, 'The VR demonstrations were amazing'),
+(6, 24, 'Some booths were too crowded'),
+(6, 25, 'Maybe extend the duration next year');
+
+-- Geraldine Aris (user_id: 5fb95ed0a0d20daf)
+-- Group 1: Activity questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(7, 1, '3'), (7, 2, '3'), (7, 3, '4'), (7, 4, '3'), (7, 5, '4'), 
+(7, 6, '3'), (7, 7, '4'), (7, 8, '3'), (7, 9, '3'), (7, 10, '3'), (7, 11, '3');
+
+-- Group 2: Speaker questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(7, 12, '4'), (7, 13, '3'), (7, 14, '4');
+
+-- Group 4: Handouts questions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(7, 17, '3'), (7, 18, '4');
+
+-- Group 6: Comments and Suggestions
+INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
+(7, 22, 'Interesting to see practical applications of classroom concepts'),
+(7, 23, 'The AI demonstrations were particularly impressive'),
+(7, 24, 'Some presenters were hard to understand'),
+(7, 25, 'More seating areas would be helpful');
 
 INSERT INTO tbl_application_requirement(
 requirement_name, 

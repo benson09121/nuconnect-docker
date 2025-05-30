@@ -117,11 +117,56 @@ async function getOrganizationDetails(org_name){
         return rows[0];
     } catch (error) {
         console.error('Error fetching organization details:', error);
+      
+async function getUserByEmail(email) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('SELECT * FROM tbl_user WHERE email = ?', [email]);
+        return rows[0] || null;
+    } finally {
+        connection.release();
+    }
+}
+
+async function archiveOrganization(organization_id, user_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL ArchiveOrganization(?, ?);', [organization_id, user_id]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error archiving organization:', error);
         throw error;
     } finally {
         connection.release();
     }
 }
+
+async function unarchiveOrganization(organization_id, user_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL UnarchiveOrganization(?, ?);', [organization_id, user_id]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error unarchiving organization:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function getOrganizationsByStatus(status) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizationsByStatus(?);', [status]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching organizations by status:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+      
 module.exports = {
     getOrganizations,
     createOrganizationApplication,
@@ -131,5 +176,9 @@ module.exports = {
     getOrganizationApplications,
     checkOrganizationName,
     checkOrganizationEmails,
-    getOrganizationDetails
+    getOrganizationDetails,
+    getUserByEmail,
+    archiveOrganization,
+    unarchiveOrganization,
+    getOrganizationsByStatus,
 };

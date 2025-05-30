@@ -1,5 +1,15 @@
 const pool = require('../../config/db');
 
+async function getUserByEmail(email) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('SELECT * FROM tbl_user WHERE email = ?', [email]);
+        return rows[0] || null;
+    } finally {
+        connection.release();
+    }
+}
+
 async function addRequirement(requirement_name, savePath, user_id) {
     const connection = await pool.getConnection();
     try {
@@ -90,6 +100,34 @@ async function addApplicationPeriod(startDate, endDate, startTime, endTime, user
     }
 }
 
+async function getAllPeriodsWithApplications() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetAllPeriodsWithApplications();');
+        return rows[0];
+    }
+    catch (error) {
+        console.error('Error fetching periods with applications:', error);
+        throw error;
+    }
+    finally {
+        connection.release();
+    }
+}
+
+async function getActiveApplicationPeriodSimple() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetActiveApplicationPeriodSimple();');
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching active application period:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
 async function getActiveApplicationPeriod(){
     const connection = await pool.getConnection();
     try {
@@ -120,13 +158,32 @@ async function updateApplicationPeriod(startDate, endDate, startTime, endTime, p
     }
 }   
 
+async function terminateActiveApplicationPeriod(user_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL TerminateActiveApplicationPeriod(?);', [user_id]);
+        return rows[0];
+    }
+    catch (error) {
+        console.error('Error terminating active application period:', error);
+        throw error;
+    }
+    finally {
+        connection.release();
+    }
+}
+
 module.exports = {
+    getUserByEmail,
     addRequirement,
     getRequirements,
     getSpecificRequirement,
     deleteRequirement,
     updateRequirement,
     addApplicationPeriod,
+    getAllPeriodsWithApplications,
     getActiveApplicationPeriod,
-    updateApplicationPeriod
+    getActiveApplicationPeriodSimple,
+    updateApplicationPeriod,
+    terminateActiveApplicationPeriod
 };
