@@ -3,16 +3,32 @@ const fs = require('fs');
 const path = require('path');
 
 const organizationsModel = require('../models/organizationsModel');
+const { get } = require('http');
 
 async function getOrganizations(req, res) {
   try {
-        //  const getOrganizations = await organizationsModel.getOrganizations();
+        const getOrganizations = await organizationsModel.getOrganizations(req.user.user_id);
          res.json(getOrganizations);
      } catch (error) {
          res.status(500).json({
              error: error.message || "An error occurred while fetching the active application period.",
          });
      }
+}
+
+async function getOrganizationDetails(req, res) {
+    try {
+        const { org_name } = req.query;
+        const organizationDetails = await organizationsModel.getOrganizationDetails(org_name);
+        if (organizationDetails.length === 0) {
+            return res.status(404).json({ message: 'Organization not found' });
+        }
+        res.json(organizationDetails);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the organization details.",
+        });
+    }
 }
 
 async function createOrganizationApplication(req, res) {
@@ -154,7 +170,8 @@ async function rejectApplication(req, res) {
 async function getOrganizationRequirement(req, res) {
     const requirement_name  = req.query.requirement_name;
     let org_name = req.query.org_name;
-    org_name = org_name ? org_name.toLowerCase().replace(/ /g, '-') : org_name;
+    // org_name = org_name ? org_name.toLowerCase().replace(/ /g, '-') : org_name;
+    org_name = encodeURIComponent(org_name);  
     try {
         
         res.header('Access-Control-Allow-Origin', 'http://localhost:5173');
@@ -173,14 +190,15 @@ async function getOrganizationRequirement(req, res) {
 async function getOrganizationLogo(req, res) {
     let org_name = req.query.org_name;
     let logo_name = req.query.logo_name;
-    org_name = org_name ? org_name.toLowerCase().replace(/ /g, '-') : org_name;
+    // org_name = org_name ? org_name.toLowerCase().replace(/ /g, '-') : org_name;
+    const org_name_encoded = encodeURIComponent(org_name);
     try {
         // Set CORS header for browser access
         res.header('Access-Control-Allow-Origin', 'http://localhost:5173');
-        // Set Content-Disposition so browser handles as image (inline)
+        // Set Content-Disposition so browser handles as image (inline) 
         res.setHeader('Content-Disposition', `inline; filename="${logo_name}"`);
         // X-Accel-Redirect for Nginx internal serving
-        res.setHeader('X-Accel-Redirect', `/protected-organization-requirements/${org_name}/logo/${logo_name}`);
+        res.setHeader('X-Accel-Redirect', `/protected-organization-requirements/${org_name_encoded}/logo/${logo_name}`);
         res.end();
     } catch (error) {
         res.status(500).json({
@@ -296,6 +314,7 @@ module.exports = {
     getOrganizationApplications,
     checkOrganizationName,
     checkOrganizationEmails,
+    getOrganizationDetails,
     archiveOrganization,
     unarchiveOrganization,
     getOrganizationsByStatus,

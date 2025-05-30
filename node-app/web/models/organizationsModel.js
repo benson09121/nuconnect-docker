@@ -1,6 +1,20 @@
 const pool = require('../../config/db');
 
 
+
+async function getOrganizations(user_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizationsWeb(?);',[user_id]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching organizations:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
 async function createOrganizationApplication(organizations, executives, requirements, user_id) {
     const connection = await pool.getConnection();
     try {
@@ -70,7 +84,7 @@ async function getOrganizationApplications() {
     }
 }
 
- async function checkOrganizationName(org_name) {
+async function checkOrganizationName(org_name) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL CheckOrganizationName(?);', [org_name]);
@@ -81,9 +95,9 @@ async function getOrganizationApplications() {
     } finally {
         connection.release();
     }
-    
- }
- async function checkOrganizationEmails(org_emails) {
+
+}
+async function checkOrganizationEmails(org_emails) {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL CheckOrganizationEmails(?);', [org_emails]);
@@ -96,6 +110,14 @@ async function getOrganizationApplications() {
     }
 }
 
+async function getOrganizationDetails(org_name){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizationDetails(?);', [org_name]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching organization details:', error);
+      
 async function getUserByEmail(email) {
     const connection = await pool.getConnection();
     try {
@@ -144,8 +166,9 @@ async function getOrganizationsByStatus(status) {
         connection.release();
     }
 }
-
+      
 module.exports = {
+    getOrganizations,
     createOrganizationApplication,
     getSpecificApplication,
     approveApplication,
@@ -153,6 +176,7 @@ module.exports = {
     getOrganizationApplications,
     checkOrganizationName,
     checkOrganizationEmails,
+    getOrganizationDetails,
     getUserByEmail,
     archiveOrganization,
     unarchiveOrganization,

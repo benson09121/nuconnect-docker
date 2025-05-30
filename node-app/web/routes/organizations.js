@@ -6,6 +6,8 @@ const middleware = require('../../middlewares/middleWare');
 // router.get('/organizations', middleware.validateAzureJWT, middleware.hasPermission("VIEW_ORGANIZATION"), organizationsController.getOrganizations);
 router.get('/organizations-by-status', middleware.validateAzureJWT, middleware.hasPermission("VIEW_ORGANIZATION"), organizationsController.getOrganizationsByStatus);
 router.post('/organizations', middleware.validateAzureJWT, organizationsController.createOrganizationApplication);
+router.get('/organizations', middleware.validateAzureJWT, organizationsController.getOrganizations);
+router.get('/organization-details', middleware.validateAzureJWT, organizationsController.getOrganizationDetails);
 router.get('/getSpecificApplication', middleware.validateAzureJWT, organizationsController.getSpecificApplication);
 router.get('/org-applications', middleware.validateAzureJWT, organizationsController.getOrganizationApplications);
 router.post('/approve-application', middleware.validateAzureJWT, organizationsController.approveApplication);
@@ -17,4 +19,4 @@ router.post('/check-org-emails', middleware.validateAzureJWT, organizationsContr
 router.post('/archive-organization', middleware.validateAzureJWT, middleware.hasPermission("ARCHIVE_ORGANIZATION"), organizationsController.archiveOrganization);
 router.post('/unarchive-organization', middleware.validateAzureJWT, middleware.hasPermission("ARCHIVE_ORGANIZATION"), organizationsController.unarchiveOrganization);
 
-module.exports = router;
+module.exports = router
