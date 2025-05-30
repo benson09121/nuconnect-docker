@@ -199,6 +199,67 @@ async function getEventEvaluationResponsesByGroup(event_id) {
   }
 }
 
+async function getEventApplicationDetails(event_application_id) {
+  const connection = await pool.getConnection();
+  try {
+    const [results] = await connection.query('CALL GetEventApplicationDetails(?);', [event_application_id]);
+    // MySQL returns multiple result sets for each SELECT in the procedure
+    return {
+      application: results[0][0] || null,
+      requirements: results[1] || [],
+      approvals: results[2] || []
+    };
+  } finally {
+    connection.release();
+  }
+}
+
+async function getEventApplicationIdByProposedEventId(proposed_event_id) {
+  const [rows] = await pool.query(
+    'SELECT event_application_id FROM tbl_event_application WHERE proposed_event_id = ? LIMIT 1',
+    [proposed_event_id]
+  );
+  return rows.length > 0 ? rows[0].event_application_id : null;
+}
+
+async function createEventApplication(
+  organization_id,
+  cycle_number,
+  applicant_user_id,
+  event,
+  requirements
+) {
+  const connection = await pool.getConnection();
+  try {
+    const [result] = await connection.query(
+      'CALL CreateEventApplication(?, ?, ?, ?, ?);',
+      [
+        organization_id,
+        cycle_number,
+        applicant_user_id,
+        JSON.stringify(event),
+        JSON.stringify(requirements)
+      ]
+    );
+    return result[0];
+  } finally {
+    connection.release();
+  }
+}
+
+async function getOrganizationMembership(user_id) {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query(
+      'SELECT organization_id, cycle_number FROM tbl_organization_members WHERE user_id = ? ORDER BY joined_at DESC LIMIT 1',
+      [user_id]
+    );
+    return rows[0] || null;
+  } finally {
+    connection.release();
+  }
+}
+
 module.exports = {
     addEvent,
     getEventRequirements,
@@ -215,5 +276,9 @@ module.exports = {
     rejectPaidEventRegistration,
     getEventStats,
     getAllEvaluationQuestions,
-    getEventEvaluationResponsesByGroup
+    getEventEvaluationResponsesByGroup,
+    getEventApplicationDetails,
+    getEventApplicationIdByProposedEventId,
+    createEventApplication,
+    getOrganizationMembership,
 };

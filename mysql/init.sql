@@ -3486,6 +3486,428 @@ END$$
 
 DELIMITER ;
 
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventApplicationDetails(
+    IN p_event_application_id INT
+)
+BEGIN
+    -- Get basic event application information
+    SELECT 
+        ea.event_application_id,
+        ea.organization_id,
+        o.name AS organization_name,
+        o.adviser_id,
+        CONCAT(adviser.f_name, ' ', adviser.l_name) AS adviser_name,
+        ea.cycle_number,
+        rc.start_date AS cycle_start_date,
+        ea.proposed_event_id,
+        e.title,
+        e.description,
+        e.venue_type,
+        e.venue,
+        e.start_date,
+        e.end_date,
+        e.start_time,
+        e.end_time,
+        e.status AS event_status,
+        e.type,
+        e.is_open_to,
+        e.fee,
+        e.capacity,
+        e.created_at AS event_created_at,
+        ea.applicant_user_id,
+        CONCAT(applicant.f_name, ' ', applicant.l_name) AS applicant_name,
+        applicant.email AS applicant_email,
+        ea.status AS application_status,
+        ea.created_at AS application_created_at,
+        ea.updated_at AS application_updated_at
+    FROM tbl_event_application ea
+    JOIN tbl_organization o ON ea.organization_id = o.organization_id
+    LEFT JOIN tbl_event e ON ea.proposed_event_id = e.event_id
+    JOIN tbl_renewal_cycle rc ON ea.organization_id = rc.organization_id 
+        AND ea.cycle_number = rc.cycle_number
+    JOIN tbl_user applicant ON ea.applicant_user_id = applicant.user_id
+    JOIN tbl_user adviser ON o.adviser_id = adviser.user_id
+    WHERE ea.event_application_id = p_event_application_id;
+    
+    -- Get all submitted requirements for this application
+    SELECT 
+        ers.submission_id,
+        ers.requirement_id,
+        ear.requirement_name,
+        ear.is_applicable_to,
+        ers.file_path,
+        ers.submitted_by,
+        CONCAT(u.f_name, ' ', u.l_name) AS submitted_by_name,
+        ers.submitted_at
+    FROM tbl_event_requirement_submissions ers
+    JOIN tbl_event_application_requirement ear ON ers.requirement_id = ear.requirement_id
+    JOIN tbl_user u ON ers.submitted_by = u.user_id
+    WHERE ers.event_application_id = p_event_application_id
+    ORDER BY ear.is_applicable_to, ear.requirement_name;
+    
+    -- Get all approval steps and statuses
+    SELECT 
+        eap.event_approval_id,
+        eap.approver_id,
+        CONCAT(u.f_name, ' ', u.l_name) AS approver_name,
+        u.email AS approver_email,
+        r.role_name,
+        r.role_id,
+        eap.approval_role_id,
+        eap.status AS approval_status,
+        eap.comment,
+        eap.step_number,
+        eap.approved_at
+    FROM tbl_event_approval_process eap
+    JOIN tbl_user u ON eap.approver_id = u.user_id
+    JOIN tbl_role r ON eap.approval_role_id = r.role_id
+    WHERE eap.event_application_id = p_event_application_id
+    ORDER BY eap.step_number;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE CreateEventApplication(
+    IN p_organization_id INT,
+    IN p_cycle_number INT,
+    IN p_applicant_user_id VARCHAR(200),
+    IN p_event JSON,
+    IN p_requirements JSON
+)
+BEGIN
+    DECLARE v_event_application_id INT;
+    DECLARE v_event_id INT;
+    DECLARE i INT DEFAULT 0;
+    DECLARE v_requirement_count INT;
+    DECLARE v_req_id INT;
+    DECLARE v_file_path VARCHAR(255);
+    DECLARE v_error_msg VARCHAR(255);
+    DECLARE v_president_id VARCHAR(200);
+    DECLARE v_first_step INT;
+    
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    -- Validate organization exists and user is authorized
+    -- IF NOT EXISTS (
+--         SELECT 1 FROM tbl_organization 
+--         WHERE organization_id = p_organization_id
+--     ) THEN
+--         SIGNAL SQLSTATE '45000' 
+--         SET MESSAGE_TEXT = 'Organization not found';
+--     END IF;
+
+    -- Validate user exists and belongs to organization
+    -- IF NOT EXISTS (
+--         SELECT 1 FROM tbl_user 
+--         WHERE user_id = p_applicant_user_id
+--     ) THEN
+--         SIGNAL SQLSTATE '45000' 
+--         SET MESSAGE_TEXT = 'User not found';
+--     END IF;
+
+    -- Check/create renewal cycle if needed
+    IF NOT EXISTS (
+        SELECT 1 FROM tbl_renewal_cycle 
+        WHERE organization_id = p_organization_id 
+        AND cycle_number = p_cycle_number
+    ) THEN
+        -- Get current president for the organization
+        SELECT president_id INTO v_president_id
+        FROM tbl_renewal_cycle
+        WHERE organization_id = p_organization_id
+        ORDER BY cycle_number DESC
+        LIMIT 1;
+        
+        IF v_president_id IS NULL THEN
+            SET v_president_id = p_applicant_user_id; -- Fallback to applicant if no president found
+        END IF;
+
+        INSERT INTO tbl_renewal_cycle (
+            organization_id,
+            cycle_number,
+            president_id
+        ) VALUES (
+            p_organization_id,
+            p_cycle_number,
+            v_president_id
+        );
+    END IF;
+
+    -- Create event record
+    INSERT INTO tbl_event (
+        organization_id,
+        user_id,
+        title,
+        description,
+        venue_type,
+        venue,
+        start_date,
+        end_date,
+        start_time,
+        end_time,
+        status,
+        type,
+        is_open_to,
+        fee,
+        capacity
+    ) VALUES (
+        p_organization_id,
+        p_applicant_user_id,
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.title')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.description')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.venue_type')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.venue')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.start_date')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.end_date')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.start_time')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.end_time')),
+        'Pending',
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.type')),
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.is_open_to')),
+        CASE
+            WHEN JSON_EXTRACT(p_event, '$.fee') IS NULL 
+                 OR JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.fee')) = 'null'
+                THEN NULL
+            ELSE CAST(JSON_EXTRACT(p_event, '$.fee') AS UNSIGNED)
+        END,
+        CASE
+            WHEN JSON_EXTRACT(p_event, '$.capacity') IS NULL 
+                 OR JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.capacity')) = 'null'
+                THEN NULL
+            ELSE CAST(JSON_EXTRACT(p_event, '$.capacity') AS UNSIGNED)
+        END
+    );
+
+    SET v_event_id = LAST_INSERT_ID();
+
+    -- Create event application record
+    INSERT INTO tbl_event_application (
+        organization_id,
+        cycle_number,
+        proposed_event_id,
+        applicant_user_id,
+        status
+    ) VALUES (
+        p_organization_id,
+        p_cycle_number,
+        v_event_id,
+        p_applicant_user_id,
+        'Pending'
+    );
+
+    SET v_event_application_id = LAST_INSERT_ID();
+
+    -- Handle requirements
+    SET v_requirement_count = JSON_LENGTH(p_requirements);
+    SET i = 0;
+    
+    WHILE i < v_requirement_count DO
+        BEGIN
+            DECLARE v_requirement_exists TINYINT(1);
+            
+            SET v_req_id = CAST(JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_id'))) AS UNSIGNED);
+            SET v_file_path = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].file_path')));
+            
+            -- Validate requirement exists
+            SELECT EXISTS(
+                SELECT 1 FROM tbl_event_application_requirement 
+                WHERE requirement_id = v_req_id
+            ) INTO v_requirement_exists;
+            
+            IF NOT v_requirement_exists THEN
+                SET v_error_msg = CONCAT('Invalid requirement ID: ', v_req_id);
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_error_msg;
+            END IF;
+            
+            -- Store requirement submission
+            INSERT INTO tbl_event_requirement_submissions (
+                event_id,
+                event_application_id,
+                requirement_id,
+                cycle_number,
+                organization_id,
+                file_path,
+                submitted_by
+            ) VALUES (
+                v_event_id,
+                v_event_application_id,
+                v_req_id,
+                p_cycle_number,
+                p_organization_id,
+                v_file_path,
+                p_applicant_user_id
+            );
+
+            SET i = i + 1;
+        END;
+    END WHILE;
+
+    -- Initiate approval process
+    CALL InitiateEventApprovalProcess(v_event_application_id);
+
+    COMMIT;
+
+    -- Return success information
+    SELECT 
+        v_event_id AS event_id,
+        v_event_application_id AS event_application_id,
+        JSON_UNQUOTE(JSON_EXTRACT(p_event, '$.title')) AS event_title,
+        p_organization_id AS organization_id,
+        p_cycle_number AS cycle_number;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE `InitiateEventApprovalProcess`(IN p_event_application_id INT)
+BEGIN
+    DECLARE v_org_id INT;
+    DECLARE v_program_id INT;
+    DECLARE v_adviser_id VARCHAR(200);
+    DECLARE v_role_id INT;
+    DECLARE v_hierarchy_order INT;
+    DECLARE v_approver_id VARCHAR(200);
+    DECLARE done BOOLEAN DEFAULT FALSE;
+    DECLARE step_counter INT DEFAULT 0;
+    DECLARE v_approvers_found INT DEFAULT 0;
+
+    -- Get organization details first
+    SELECT 
+        o.organization_id, 
+        o.base_program_id, 
+        o.adviser_id
+    INTO 
+        v_org_id, 
+        v_program_id, 
+        v_adviser_id
+    FROM tbl_event_application ea
+    JOIN tbl_organization o ON ea.organization_id = o.organization_id
+    WHERE ea.event_application_id = p_event_application_id;
+
+    -- Debug: Check if we got organization details
+    IF v_org_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Organization not found for this application';
+    END IF;
+
+    -- Debug: Check if adviser exists
+    IF v_adviser_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Organization has no assigned adviser';
+    END IF;
+
+    -- Validate Adviser exists and has correct role
+    IF NOT EXISTS (
+        SELECT 1 FROM tbl_user 
+        WHERE user_id = v_adviser_id 
+        AND role_id = (SELECT role_id FROM tbl_role WHERE role_name = 'Adviser')
+    ) THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Organization adviser must have Adviser role';
+    END IF;
+
+    -- Get all approver roles (excluding applicant)
+    BEGIN
+        DECLARE role_cursor CURSOR FOR
+            SELECT r.role_id, r.hierarchy_order
+            FROM tbl_role r
+            WHERE r.is_approver = 1
+            AND r.hierarchy_order IS NOT NULL
+            AND r.hierarchy_order > 1  -- Exclude applicant (assuming hierarchy_order=1 is applicant)
+            ORDER BY r.hierarchy_order;
+
+        DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+        OPEN role_cursor;
+
+        role_loop: LOOP
+            FETCH role_cursor INTO v_role_id, v_hierarchy_order;
+            IF done THEN
+                LEAVE role_loop;
+            END IF;
+
+            -- Find approver based on role
+            IF v_role_id = (SELECT role_id FROM tbl_role WHERE role_name = 'Adviser') THEN
+                -- Use organization's adviser
+                SET v_approver_id = v_adviser_id;
+                SET v_approvers_found = v_approvers_found + 1;
+            ELSEIF v_role_id = (SELECT role_id FROM tbl_role WHERE role_name = 'Program Chair') THEN
+                -- Find program chair for this organization's program
+                SELECT user_id INTO v_approver_id
+                FROM tbl_user
+                WHERE role_id = v_role_id
+                AND program_id = v_program_id
+                LIMIT 1;
+                
+                IF v_approver_id IS NOT NULL THEN
+                    SET v_approvers_found = v_approvers_found + 1;
+                END IF;
+            ELSE
+                -- For other roles (like OSA Director, etc.)
+                SELECT user_id INTO v_approver_id
+                FROM tbl_user
+                WHERE role_id = v_role_id
+                LIMIT 1;
+                
+                IF v_approver_id IS NOT NULL THEN
+                    SET v_approvers_found = v_approvers_found + 1;
+                END IF;
+            END IF;
+
+            -- Insert approval step if we found an approver
+            IF v_approver_id IS NOT NULL THEN
+                INSERT INTO tbl_event_approval_process (
+                    event_application_id,
+                    approver_id,
+                    approval_role_id,
+                    status,
+                    step_number
+                ) VALUES (
+                    p_event_application_id,
+                    v_approver_id,
+                    v_role_id,
+                    'Pending',  -- All steps require manual approval
+                    v_hierarchy_order
+                );
+            END IF;
+            
+            SET v_approver_id = NULL; -- Reset for next iteration
+        END LOOP role_loop;
+
+        CLOSE role_cursor;
+    END;
+
+    -- Validate we created at least one approval step
+    IF v_approvers_found = 0 THEN
+        -- Debug information
+        SELECT 
+            v_org_id AS org_id,
+            v_program_id AS program_id,
+            v_adviser_id AS adviser_id,
+            (SELECT COUNT(*) FROM tbl_role WHERE is_approver = 1 AND hierarchy_order > 1) AS approver_roles_count,
+            (SELECT COUNT(*) FROM tbl_user WHERE role_id IN 
+                (SELECT role_id FROM tbl_role WHERE is_approver = 1 AND hierarchy_order > 1)
+            ) AS approvers_count;
+            
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'No valid approvers found for any approval steps';
+    END IF;
+END$$
+
+DELIMITER ;
+
+
 -- INDEXES
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
@@ -3571,12 +3993,12 @@ INSERT INTO tbl_program (name, description) VALUES
 ("Bachelor of Science in Computer Science", "BSCS");
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
-("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 5),
-("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 6),
+("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 6),
+("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 5),
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
-("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 5);
+("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
 
 
 INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
@@ -3641,91 +4063,6 @@ INSERT INTO tbl_event (
 (2002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Coding Bootcamp', 'Intensive coding bootcamp for beginners', 'Face to face', 'Lab 202', '2023-04-15', '2023-04-17', '09:00:00', '16:00:00', 'Approved', 'Paid', 'Members only', 100, 50, '2023-03-10 10:00:00', 'Certificate of Completion'),
 
 (2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
-
--- -- Then insert attendance records
--- INSERT INTO tbl_event_attendance (event_id, user_id, status, time_in, time_out) VALUES
--- -- For Innovation Pitch Fest (event_id 1001)
--- (1001, '900f929ec408cb4', 'Attended', '2025-06-10 08:55:23', '2025-06-10 15:05:45'),
--- (1001, '5fb95ed0a0d20daf', 'Evaluated', '2025-06-10 09:10:12', '2025-06-10 15:00:30'),
--- (1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Pending', '2025-06-10 09:30:00', NULL),
-
--- -- For Groove Jam 2025 (event_id 1002)
--- (1002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Registered', NULL, NULL),
--- (1002, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Pending', NULL, NULL),
-
--- -- For Hack-It-Out (event_id 1003)
--- (1003, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
--- (1003, '900f929ec408cb4', 'Registered', NULL, NULL),
-
-
--- -- For Earth Hour Rally (event_id 1004)
--- (1004, '5fb95ed0a0d20daf', 'Attended', '2025-06-15 06:25:00', '2025-06-15 10:35:00'),
--- (1004, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2025-06-15 06:40:00', '2025-06-15 10:20:00'),
--- (1004, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2025-06-15 07:00:00', NULL),
-
--- INSERT INTO tbl_event_attendance (
---   event_id, user_id, status, created_at
--- ) VALUES (
---   1001, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 
---   'Rejected', NOW()
--- );
-
--- -- For E-Sports Showdown (event_id 1005)
--- (1005, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
--- (1005, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', 'Pending', NULL, NULL),
-
--- -- For 2023 Tech Expo (event_id 2001)
--- (2001, '900f929ec408cb4', 'Attended', '2023-03-10 07:45:00', '2023-03-10 17:15:00'),
--- (2001, '5fb95ed0a0d20daf', 'Attended', '2023-03-10 08:10:00', '2023-03-10 16:50:00'),
-
--- -- For 2023 Coding Bootcamp (event_id 2002)
--- (2002, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', 'Attended', '2023-04-15 08:30:00', '2023-04-17 16:00:00'),
--- (2002, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Evaluated', '2023-04-15 09:00:00', NULL),
-
--- -- For 2023 Summer Seminar (event_id 2003)
--- (2003, 'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', 'Registered', NULL, NULL),
--- (2003, '900f929ec408cb4', 'Attended', '2023-05-05 09:45:00', '2023-05-05 12:15:00');
-
-
--- INSERT INTO tbl_logs (
---     user_id,
---     timestamp,
---     action,
---     redirect_url,
---     file_path,
---     meta_data,
---     type
--- ) VALUES
--- -- Sample 1: File upload with redirect and metadata
--- ('USR00001', CURRENT_TIMESTAMP, 'Uploaded organization logo',
---  '/organizations/NUD/details',
---  '["/uploads/logos/nud_logo.png"]',
---  '{"org_id": "NUD"}',
---  'file_upload'),
-
--- -- Sample 2: Info log with redirect only
--- ('USR00002', CURRENT_TIMESTAMP, 'Viewed event details',
---  '/events/45',
---  NULL,
---  '{"event_id": 45, "view_mode": "admin"}',
---  'info'),
-
--- -- Sample 3: Error log without redirect
--- ('USR00003', CURRENT_TIMESTAMP, 'Failed to submit event proposal due to missing requirements',
---  NULL,
---  NULL,
---  '{"attempted_event_id": 50}',
---  'error'),
-
--- INSERT INTO tbl_application_period(start_date, end_date, start_time, end_time, is_active, created_by) 
--- VALUES(
--- "2025-05-24",
--- "2025-06-20",
--- "15:24:00",
--- "10:00:00",
--- 1,
--- "6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0"
--- );
 
 -- Insert evaluation question groups
 INSERT INTO tbl_evaluation_question_group (group_title, group_description, is_active)

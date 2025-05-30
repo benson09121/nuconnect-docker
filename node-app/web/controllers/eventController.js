@@ -1,4 +1,6 @@
 const eventModel = require('../models/eventModel');
+const fs = require('fs');
+const path = require('path');
 
 async function addEvent(req, res) {
     try {
@@ -27,6 +29,7 @@ async function saveEventRequirements(req, res) {
   try {
     let { user_id, user_email, requirements } = req.body;
 
+    // If user_id is not provided but user_email is, look up user_id
     if (!user_id && user_email) {
       const user = await eventModel.getUserByEmail(user_email);
       if (!user) {
@@ -258,6 +261,155 @@ async function getEventEvaluationResponsesByGroup(req, res) {
   }
 }
 
+async function getEventApplicationDetails(req, res) {
+  try {
+    const proposed_event_id = req.params.id;
+    // Lookup event_application_id from proposed_event_id
+    const event_application_id = await eventModel.getEventApplicationIdByProposedEventId(proposed_event_id);
+    if (!event_application_id) {
+      return res.status(404).json({ message: 'No event application found for this proposed event.' });
+    }
+    // Use the existing method
+    const details = await eventModel.getEventApplicationDetails(event_application_id);
+    if (!details.application) {
+      return res.status(404).json({ message: 'Event application not found' });
+    }
+    res.status(200).json(details);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while fetching event application details.",
+    });
+  }
+}
+
+async function createEventApplication(req, res) {
+  try {
+    // Parse event and requirements from the request
+    const event = JSON.parse(req.body.event);
+    const requirements = JSON.parse(req.body.requirements);
+
+    // Lookup user_id from email if not present
+    let applicant_user_id = req.user?.user_id;
+    if (!applicant_user_id && req.body.user_email) {
+      const user = await eventModel.getUserByEmail(req.body.user_email);
+      if (!user) {
+        return res.status(404).json({ message: "User not found for the provided email." });
+      }
+      applicant_user_id = user.user_id;
+    }
+
+    // Lookup organization_id from tbl_organization_members if not provided
+    let organization_id = event.organization_id;
+    let cycle_number = event.cycle_number;
+    if ((!organization_id || !cycle_number) && applicant_user_id) {
+      const orgMember = await eventModel.getOrganizationMembership(applicant_user_id);
+      if (orgMember) {
+        organization_id = orgMember.organization_id;
+        cycle_number = orgMember.cycle_number;
+      }
+    }
+
+    // If still no organization_id, set to 1 as default
+    if (!organization_id) {
+      organization_id = 1;
+    }
+    // If still no cycle_number, set to 1 as default
+    if (!cycle_number) {
+      cycle_number = 1;
+    }
+
+    // Handle file uploads for requirements
+    const requirementFiles = {};
+    requirements.forEach(reqItem => {
+      const fileKey = `requirement_${reqItem.requirement_id}`;
+      if (req.files && req.files[fileKey]) {
+        requirementFiles[reqItem.requirement_id] = req.files[fileKey];
+      }
+    });
+
+    // Generate filenames for requirements and use them for both DB and file upload
+    const requirementFilePaths = requirements.map(reqItem => {
+      const file = requirementFiles[reqItem.requirement_id];
+      if (file) {
+        const filename = `requirement-${Date.now()}-${file.name}`;
+        return {
+          requirement_id: reqItem.requirement_id,
+          file_path: filename
+        };
+      } else {
+        return {
+          requirement_id: reqItem.requirement_id,
+          file_path: reqItem.file_path || null
+        };
+      }
+    });
+
+    // Call the stored procedure
+    const dbResult = await eventModel.createEventApplication(
+      organization_id,
+      cycle_number,
+      applicant_user_id,
+      event,
+      requirementFilePaths
+    );
+
+    // Save files to disk
+    const orgDir = path.join('/app/organizations', String(organization_id), 'events', String(dbResult[0].event_id));
+    if (!fs.existsSync(orgDir)) {
+      fs.mkdirSync(orgDir, { recursive: true });
+    }
+    const requirementsDir = path.join(orgDir, 'requirements');
+    if (!fs.existsSync(requirementsDir)) {
+      fs.mkdirSync(requirementsDir, { recursive: true });
+    }
+
+    requirements.forEach(reqItem => {
+      const file = requirementFiles[reqItem.requirement_id];
+      if (file) {
+        const filename = requirementFilePaths.find(r => r.requirement_id === reqItem.requirement_id)?.file_path;
+        fs.writeFileSync(
+          path.join(requirementsDir, filename),
+          file.data
+        );
+      }
+    });
+
+    res.status(201).json({
+      message: 'Event application submitted successfully',
+      data: dbResult[0]
+    });
+  } catch (error) {
+    console.error("CreateEventApplication error:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+async function getEventApplicationRequirement(req, res) {
+    const requirement_name = req.query.requirement_name;
+    let org_id = req.query.organization_id;
+    let event_id = req.query.event_id;
+
+    // Encode organization_id and event_id for path safety (if needed)
+    org_id = encodeURIComponent(org_id);
+    event_id = encodeURIComponent(event_id);
+
+    try {
+        res.header('Access-Control-Allow-Origin', 'http://localhost:5173');
+        // Example path: /protected-event-requirements/{org_id}/events/{event_id}/requirements/{requirement_name}
+        res.setHeader(
+            'X-Accel-Redirect',
+            `/protected-event-requirements/${org_id}/events/${event_id}/requirements/${requirement_name}`
+        );
+        const match = requirement_name.match(/requirement-(\d+)-(.+)/);
+        const downloadName = match ? match[0] : requirement_name;
+        res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+        res.end();
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the event requirement.",
+        });
+    }
+}
 
 module.exports = {
     addEvent,
@@ -274,5 +426,8 @@ module.exports = {
     rejectPaidEventRegistration,
     getEventStats,
     getAllEvaluationQuestions,
-    getEventEvaluationResponsesByGroup
+    getEventEvaluationResponsesByGroup,
+    getEventApplicationDetails,
+    createEventApplication,
+    getEventApplicationRequirement,
 };

@@ -3,6 +3,24 @@ const router = express.Router();
 const eventController = require('../controllers/eventController');
 const middleware = require('../../middlewares/middleWare');
 
+router.post(
+  '/event-applications',
+  (req, res, next) => {
+    console.log('Body:', req.body);
+    console.log('Files:', req.files);
+    next();
+  },
+  middleware.validateAzureJWT,
+  middleware.hasPermission("CREATE_EVENT"),
+  eventController.createEventApplication
+);
+router.get('/event-applications/:id/details', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventApplicationDetails);
+router.get(
+  '/event-applications/requirement',
+  middleware.validateAzureJWT,
+  middleware.hasPermission("VIEW_EVENT"),
+  eventController.getEventApplicationRequirement
+);
 
 router.post('/events', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_EVENTS"), eventController.addEvent);
 router.get('/events', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEvents);
