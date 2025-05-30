@@ -950,6 +950,49 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationsByStatus(
+    IN p_status ENUM('Pending', 'Approved', 'Rejected', 'Renewal', 'Archived')
+)
+BEGIN
+    SELECT 
+        o.organization_id,
+        o.adviser_id,
+        o.name AS organization_name,
+        o.description,
+        o.base_program_id,
+        o.logo,
+        o.status,
+        o.membership_fee_type,
+        o.membership_fee_amount,
+        o.is_recruiting,
+        o.is_open_to_all_courses,
+        o.category,
+        o.created_at,
+        -- Main/base program (if any)
+        p.program_id AS base_program_id,
+        p.name AS base_program_name,
+        p.description AS base_program_description,
+        -- All additional programs (if any, as JSON array)
+        (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'program_id', pr.program_id,
+                    'program_name', pr.name,
+                    'program_description', pr.description
+                )
+            )
+            FROM tbl_organization_course oc
+            JOIN tbl_program pr ON oc.program_id = pr.program_id
+            WHERE oc.organization_id = o.organization_id
+        ) AS additional_programs
+    FROM tbl_organization o
+    LEFT JOIN tbl_program p ON o.base_program_id = p.program_id
+    WHERE o.status = p_status
+    ORDER BY o.created_at DESC;
+END $$
+DELIMITER ;
+
+DELIMITER $$
 
 CREATE DEFINER='admin'@'%' PROCEDURE ArchiveOrganization(
     IN p_organization_id INT,
@@ -958,8 +1001,7 @@ CREATE DEFINER='admin'@'%' PROCEDURE ArchiveOrganization(
 BEGIN
     -- Update organization status to 'Archived'
     UPDATE tbl_organization
-    SET status = 'Archived',
-        updated_at = CURRENT_TIMESTAMP
+    SET status = 'Archived'
     WHERE organization_id = p_organization_id;
 
     -- Log the action
@@ -987,8 +1029,7 @@ CREATE DEFINER='admin'@'%' PROCEDURE UnarchiveOrganization(
 BEGIN
     -- Unarchive organization (set status to 'Approved', or change as needed)
     UPDATE tbl_organization
-    SET status = 'Approved',
-        updated_at = CURRENT_TIMESTAMP
+    SET status = 'Approved'
     WHERE organization_id = p_organization_id
       AND status = 'Archived';
 

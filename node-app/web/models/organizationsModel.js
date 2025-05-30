@@ -132,6 +132,19 @@ async function unarchiveOrganization(organization_id, user_id) {
     }
 }
 
+async function getOrganizationsByStatus(status) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizationsByStatus(?);', [status]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching organizations by status:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
 module.exports = {
     createOrganizationApplication,
     getSpecificApplication,
@@ -142,5 +155,6 @@ module.exports = {
     checkOrganizationEmails,
     getUserByEmail,
     archiveOrganization,
-    unarchiveOrganization
+    unarchiveOrganization,
+    getOrganizationsByStatus,
 };

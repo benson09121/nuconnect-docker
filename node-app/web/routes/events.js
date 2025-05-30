@@ -9,7 +9,7 @@ router.get('/events', middleware.validateAzureJWT, middleware.hasPermission("VIE
 router.get('/events/past', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getPastEvents);
 router.get('/events/evaluation-questions', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getAllEvaluationQuestions);
 
-router.get('/event-requirements', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_REQUIREMENTS"),eventController.getEventRequirements);
+router.get('/event-requirements', middleware.validateAzureJWT, middleware.hasPermission("CREATE_EVENT"),eventController.getEventRequirements);
 router.post('/event-requirements/save', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_REQUIREMENTS"), eventController.saveEventRequirements);
 
 router.get('/events/:id', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventById);
