@@ -73,7 +73,7 @@ CREATE TABLE tbl_organization(
     description TEXT,
     base_program_id INT NULL, -- NULL meaning open to all
     logo VARCHAR(255),
-    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal') DEFAULT 'Pending',
+    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal', 'Archived') DEFAULT 'Pending',
     membership_fee_type ENUM('Per Term', 'Whole Academic Year',"Free") NOT NULL DEFAULT 'Free',
     category ENUM('Co-Curricular Organization', 'Extra Curricular Organization') DEFAULT 'Co-Curricular Organization',
     membership_fee_amount DECIMAL(10,2) NULL,
@@ -950,6 +950,65 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE ArchiveOrganization(
+    IN p_organization_id INT,
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    -- Update organization status to 'Archived'
+    UPDATE tbl_organization
+    SET status = 'Archived',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE organization_id = p_organization_id;
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type,
+        meta_data
+    ) VALUES (
+        p_user_id,
+        CONCAT('Archived organization ID ', p_organization_id),
+        'organization',
+        JSON_OBJECT('organization_id', p_organization_id, 'archived_at', NOW())
+    );
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE UnarchiveOrganization(
+    IN p_organization_id INT,
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    -- Unarchive organization (set status to 'Approved', or change as needed)
+    UPDATE tbl_organization
+    SET status = 'Approved',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE organization_id = p_organization_id
+      AND status = 'Archived';
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type,
+        meta_data
+    ) VALUES (
+        p_user_id,
+        CONCAT('Unarchived organization ID ', p_organization_id),
+        'organization',
+        JSON_OBJECT('organization_id', p_organization_id, 'unarchived_at', NOW())
+    );
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetUpcomingEvents(IN p_user_id VARCHAR(200))
 BEGIN
     WITH UserOrganizations AS (
@@ -1763,6 +1822,57 @@ DELIMITER ;
 
 DELIMITER $$
 
+CREATE DEFINER='admin'@'%' PROCEDURE GetAllPeriodsWithApplications()
+BEGIN
+    SELECT 
+        ap.period_id,
+        ap.start_date,
+        ap.end_date,
+        ap.start_time,
+        ap.end_time,
+        ap.is_active,
+        ap.created_by,
+        ap.created_at,
+        ap.updated_at,
+        (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'application_id', a.application_id,
+                    'organization_id', a.organization_id,
+                    'cycle_number', a.cycle_number,
+                    'application_type', a.application_type,
+                    'applicant_user_id', a.applicant_user_id,
+                    'status', a.status,
+                    'created_at', a.created_at,
+                    'updated_at', a.updated_at,
+                    'organization_name', o.name
+                )
+            )
+            FROM tbl_application a
+            LEFT JOIN tbl_organization o ON a.organization_id = o.organization_id
+            WHERE a.period_id = ap.period_id
+        ) AS applications
+    FROM tbl_application_period ap
+    ORDER BY ap.start_date DESC, ap.period_id DESC;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetActiveApplicationPeriodSimple()
+BEGIN
+    SELECT *
+    FROM tbl_application_period
+    WHERE is_active = 1
+    ORDER BY created_at DESC
+    LIMIT 1;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
 CREATE DEFINER='admin'@'%' PROCEDURE GetActiveApplicationPeriod()
 BEGIN
   DECLARE currentDate DATE;
@@ -1804,6 +1914,41 @@ BEGIN
     WHERE period_id = p_period_id;
 
 END $$
+DELIMITER ;
+
+DELIMITER $$
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE TerminateActiveApplicationPeriod(
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    DECLARE v_affected_rows INT DEFAULT 0;
+
+    -- Terminate all currently active periods
+    UPDATE tbl_application_period
+    SET is_active = 0
+    WHERE is_active = 1;
+
+    SET v_affected_rows = ROW_COUNT();
+
+    -- Log the action if any period was terminated
+    IF v_affected_rows > 0 THEN
+        INSERT INTO tbl_logs (
+            user_id,
+            action,
+            type,
+            meta_data
+        ) VALUES (
+            p_user_id,
+            'Terminated active application period(s)',
+            'application_period',
+            JSON_OBJECT('terminated_count', v_affected_rows, 'terminated_at', NOW())
+        );
+    END IF;
+END $$
+
 DELIMITER ;
 
 DELIMITER $$
@@ -3198,6 +3343,7 @@ VALUES
 (4,2),
 (4,3),
 (4,4),
+(4,8),
 (4,9),
 (4,10),
 (4,15),

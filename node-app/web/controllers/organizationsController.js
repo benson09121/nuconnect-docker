@@ -229,6 +229,46 @@ async function checkOrganizationEmails(req, res) {
     }   
 }
 
+async function archiveOrganization(req, res) {
+    try {
+        const { organization_id } = req.body;
+        if (!organization_id) {
+            return res.status(400).json({ message: 'Organization ID is required.' });
+        }
+        // Lookup user by email
+        const user = await organizationsModel.getUserByEmail(req.user.email);
+        if (!user) {
+            return res.status(404).json({ message: 'User not found.' });
+        }
+        await organizationsModel.archiveOrganization(organization_id, user.user_id);
+        res.status(200).json({ message: 'Organization archived successfully.' });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while archiving the organization.",
+        });
+    }
+}
+
+async function unarchiveOrganization(req, res) {
+    try {
+        const { organization_id } = req.body;
+        if (!organization_id) {
+            return res.status(400).json({ message: 'Organization ID is required.' });
+        }
+        // Lookup user by email
+        const user = await organizationsModel.getUserByEmail(req.user.email);
+        if (!user) {
+            return res.status(404).json({ message: 'User not found.' });
+        }
+        await organizationsModel.unarchiveOrganization(organization_id, user.user_id);
+        res.status(200).json({ message: 'Organization unarchived successfully.' });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while unarchiving the organization.",
+        });
+    }
+}
+
 
 module.exports = {
     getOrganizations,
@@ -240,5 +280,7 @@ module.exports = {
     getOrganizationLogo,
     getOrganizationApplications,
     checkOrganizationName,
-    checkOrganizationEmails 
+    checkOrganizationEmails,
+    archiveOrganization,
+    unarchiveOrganization
 };
