@@ -54,7 +54,6 @@ async function getRequirements(req, res) {
 }
 async function downloadTemplate(req, res) {
     const template_name  = req.query.template_name;
-    console.log(template_name);
     try {
         res.header('Access-Control-Allow-Origin', 'http://localhost:5173');
         res.setHeader('X-Accel-Redirect', `/protected-requirements/${template_name}`);
