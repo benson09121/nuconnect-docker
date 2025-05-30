@@ -20,13 +20,7 @@ CREATE TABLE tbl_role(
     hierarchy_order INT UNIQUE NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE tbl_approval_role (
-    approval_role_id INT AUTO_INCREMENT PRIMARY KEY,
-    role_id INT NOT NULL, -- fixed typo
-    hierarchy_order INT UNIQUE NOT NULL,
-    description VARCHAR(255),
-    FOREIGN KEY (role_id) REFERENCES tbl_role(role_id) ON DELETE CASCADE
-);
+
 
 CREATE TABLE tbl_program(
     program_id INT PRIMARY KEY AUTO_INCREMENT,
@@ -308,17 +302,17 @@ CREATE TABLE tbl_event_approval_process (
 );
 
 
-CREATE TABLE tbl_event_application_submission (
-    submission_id INT AUTO_INCREMENT PRIMARY KEY,
-    event_application_id INT,
-    requirement_id INT NOT NULL,
-    file_path VARCHAR(255) NOT NULL,
-    submitted_by VARCHAR(200) NOT NULL,
-    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (event_application_id) REFERENCES tbl_event_application(event_application_id),
-    FOREIGN KEY (requirement_id) REFERENCES tbl_event_application_requirement(requirement_id),
-    FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id)
-);
+-- CREATE TABLE tbl_event_application_submission (
+--     submission_id INT AUTO_INCREMENT PRIMARY KEY,
+--     event_application_id INT,
+--     requirement_id INT NOT NULL,
+--     file_path VARCHAR(255) NOT NULL,
+--     submitted_by VARCHAR(200) NOT NULL,
+--     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     FOREIGN KEY (event_application_id) REFERENCES tbl_event_application(event_application_id),
+--     FOREIGN KEY (requirement_id) REFERENCES tbl_event_application_requirement(requirement_id),
+--     FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id)
+-- );
 
 CREATE TABLE tbl_event_requirement_submissions (
     submission_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -517,6 +511,7 @@ CREATE TABLE tbl_organization_requirement_submission (
     FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE
 );
 
+
 -- Notifications Table: Stores the core notification details
 CREATE TABLE tbl_notification (
     notification_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -526,28 +521,32 @@ CREATE TABLE tbl_notification (
     title VARCHAR(255) NOT NULL,          
     message TEXT NOT NULL,              
     url VARCHAR(255) DEFAULT NULL,     
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (sender_id) REFERENCES tbl_user(user_id) ON DELETE SET NULL
 );
 
+
+-- Notification Recipients
 CREATE TABLE tbl_notification_recipient (
     notification_recipient_id INT AUTO_INCREMENT PRIMARY KEY,
     notification_id INT NOT NULL,        
     recipient_type ENUM('user', 'organization', 'program') NOT NULL,
-    recipient_id VARCHAR(200) NOT NULL,    
+    
+    -- Separate columns for each recipient type
+    user_id VARCHAR(200) DEFAULT NULL,
+    organization_id INT DEFAULT NULL,
+    program_id INT DEFAULT NULL,
+    
     is_read BOOLEAN DEFAULT FALSE,         
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (notification_id) REFERENCES tbl_notification(notification_id) ON DELETE CASCADE
+    
+    FOREIGN KEY (notification_id) REFERENCES tbl_notification(notification_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (organization_id) REFERENCES tbl_organization(organization_id) ON DELETE CASCADE,
+    FOREIGN KEY (program_id) REFERENCES tbl_program(program_id) ON DELETE CASCADE
 );
 
--- CREATE TABLE tbl_logs(
---     log_id INT AUTO_INCREMENT PRIMARY KEY,
---     user_id VARCHAR(200) NOT NULL,
---     action TEXT NOT NULL,
---     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
---     FOREIGN KEY (user_id) REFERENCES tbl_user(user_id) ON UPDATE CASCADE
--- );
 
-    -- Improved table for logs
 CREATE TABLE tbl_logs (
     log_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id VARCHAR(200) NOT NULL,
@@ -2013,7 +2012,6 @@ BEGIN
 
     SET v_organization_id = LAST_INSERT_ID();
     SET v_logo_filename = JSON_UNQUOTE(JSON_EXTRACT(p_organization, '$.organization_logo'));
-    SET v_sanitized_name = LOWER(REPLACE(v_org_name, ' ', '-'));
 
     -- First pass: Create users and identify president
     SET i = 0;
@@ -2209,9 +2207,9 @@ BEGIN
     SELECT 
         v_organization_id AS organization_id,
         v_application_id AS application_id,
-        v_sanitized_name AS directory_name,
-        CONCAT(v_sanitized_name, '/logo/', v_logo_filename) AS logo_path,
-        CONCAT(v_sanitized_name, '/requirements/') AS requirements_dir;
+        v_org_name AS directory_name,
+        CONCAT(v_org_name, '/logo/', v_logo_filename) AS logo_path,
+        CONCAT(v_org_name, '/requirements/') AS requirements_dir;
 END$$
 
 DELIMITER ;
@@ -2381,19 +2379,12 @@ BEGIN
             SELECT JSON_OBJECT(
                 'id', o.organization_id,
                 'name', o.name,
-                'logo_url', o.logo,
-                'status', o.status,
-                'category', o.category,
-                'membership_info', JSON_OBJECT(
-                    'fee_type', o.membership_fee_type,
-                    'fee_amount', o.membership_fee_amount,
-                    'recruiting', o.is_recruiting,
-                    'open_courses', o.is_open_to_all_courses
-                ),
-                'program', JSON_OBJECT(
-                    'id', p.program_id,
-                    'name', p.name,
-                    'description', p.description
+                'logo', o.logo,
+                'description', o.description,
+                'adviser', JSON_OBJECT(
+                    'first_name', adv.f_name,
+                    'last_name', adv.l_name,
+                    'email', adv.email
                 )
             )
             FROM tbl_organization o
@@ -2962,7 +2953,7 @@ BEGIN
       INTO @not_students
       FROM tbl_user u
       JOIN tbl_role r ON u.role_id = r.role_id
-     WHERE JSON_CONTAINS(p_emails, CAST(u.email AS JSON))
+     WHERE JSON_CONTAINS(p_emails, CONCAT('"', u.email, '"'))
        AND LOWER(r.role_name) != 'student';
 
     -- 2. Is executive in any org
@@ -2970,7 +2961,7 @@ BEGIN
       INTO @executives
       FROM tbl_user u
       JOIN tbl_organization_members om ON u.user_id = om.user_id
-     WHERE JSON_CONTAINS(p_emails, CAST(u.email AS JSON))
+     WHERE JSON_CONTAINS(p_emails, CONCAT('"', u.email, '"'))
        AND om.member_type = 'Executive';
 
     -- Merge both arrays, remove nulls
@@ -2991,6 +2982,184 @@ BEGIN
 
     SELECT JSON_OBJECT('unavailable', COALESCE(unavailable_emails, JSON_ARRAY())) AS result;
 END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationsWeb(IN p_user_id VARCHAR(200))
+BEGIN
+    DECLARE v_user_role VARCHAR(100);
+    
+    -- Get user's role
+    SELECT r.role_name INTO v_user_role
+    FROM tbl_user u
+    JOIN tbl_role r ON u.role_id = r.role_id
+    WHERE u.user_id = p_user_id;
+    
+    -- Handle different roles
+    IF v_user_role = 'Student' THEN
+        -- For Students: Get their organizations with membership status
+        SELECT 
+            o.organization_id,
+            o.name AS organization_name,
+            o.logo AS organization_logo,
+            o.status AS organization_status,
+            o.category,
+            p.name AS program_name,
+            o.created_at,
+            MAX(om.joined_at) AS last_joined_at,
+            IF(MAX(om.joined_at) IS NOT NULL, 'Active', 'Not Member') AS membership_status
+        FROM tbl_organization o
+        LEFT JOIN tbl_program p ON o.base_program_id = p.program_id
+        LEFT JOIN tbl_organization_members om 
+            ON o.organization_id = om.organization_id 
+            AND om.user_id = p_user_id
+        WHERE o.status = 'Approved'
+        GROUP BY o.organization_id
+        ORDER BY o.created_at DESC;
+        
+    ELSEIF v_user_role = 'Adviser' THEN
+        -- For Advisers: Get organizations they advise
+        SELECT 
+            o.organization_id,
+            o.name AS organization_name,
+            o.logo AS organization_logo,
+            o.status AS organization_status,
+            o.category,
+            p.name AS program_name,
+            o.created_at,
+            'Adviser' AS role_in_org
+        FROM tbl_organization o
+        LEFT JOIN tbl_program p ON o.base_program_id = p.program_id
+        WHERE o.adviser_id = p_user_id
+        ORDER BY o.created_at DESC;
+        
+    ELSEIF v_user_role = 'Program Chair' THEN
+        -- For Program Chairs: Get organizations in their program
+        SELECT 
+            o.organization_id,
+            o.name AS organization_name,
+            o.logo AS organization_logo,
+            o.status AS organization_status,
+            o.category,
+            p.name AS program_name,
+            o.created_at,
+            'Program Chair' AS role_in_org
+        FROM tbl_organization o
+        JOIN tbl_program p ON o.base_program_id = p.program_id
+        JOIN tbl_user u ON u.program_id = p.program_id
+        WHERE u.user_id = p_user_id 
+          AND o.status = 'Approved'
+        ORDER BY o.created_at DESC;
+        
+    ELSE
+        -- For all other roles: Get all approved organizations
+        SELECT 
+            o.organization_id,
+            o.name AS organization_name,
+            o.logo AS organization_logo,
+            o.status AS organization_status,
+            o.category,
+            p.name AS program_name,
+            o.created_at,
+            'Viewer' AS role_in_org
+        FROM tbl_organization o
+        LEFT JOIN tbl_program p ON o.base_program_id = p.program_id
+        WHERE o.status = 'Approved'
+        ORDER BY o.created_at DESC;
+    END IF;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationDetails(IN p_org_name VARCHAR(100))
+BEGIN
+    -- Get organization ID and current cycle
+    SET @org_id = (SELECT organization_id FROM tbl_organization WHERE name = p_org_name);
+    SET @current_cycle = (
+        SELECT MAX(cycle_number)
+        FROM tbl_renewal_cycle
+        WHERE organization_id = @org_id
+    );
+
+    -- Return organization data as JSON
+    SELECT JSON_OBJECT(
+        'organization_detail', JSON_OBJECT(
+            'org_name', o.name,
+            'category', o.category,
+            'logo', o.logo,
+            'description', o.description,
+            'adviser', JSON_OBJECT(
+                'first_name', adv.f_name,
+                'last_name', adv.l_name,
+                'email', adv.email
+            )
+        ),
+        'members', (
+            SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                'first_name', u.f_name,
+                'last_name', u.l_name,
+                'email', u.email,
+                'joined_at', om.joined_at
+            ))
+            FROM tbl_organization_members om
+            JOIN tbl_user u ON om.user_id = u.user_id
+            WHERE om.organization_id = @org_id
+                AND om.cycle_number = @current_cycle
+                -- Exclude Executive members
+                AND om.member_type != 'Executive'
+                -- Exclude Committee members
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM tbl_committee_members cm
+                    JOIN tbl_committee c ON cm.committee_id = c.committee_id
+                    WHERE c.organization_id = @org_id
+                        AND c.cycle_number = @current_cycle
+                        AND cm.user_id = om.user_id
+                )
+        ),
+        'executive_members', (
+            SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                'first_name', u.f_name,
+                'last_name', u.l_name,
+                'email', u.email,
+                'role_title', er.role_title
+            ))
+            FROM tbl_organization_members om
+            JOIN tbl_user u ON om.user_id = u.user_id
+            JOIN tbl_executive_role er ON om.executive_role_id = er.executive_role_id
+            WHERE om.organization_id = @org_id
+                AND om.cycle_number = @current_cycle
+                AND om.member_type = 'Executive'
+        ),
+        'committee_members', (
+            SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                'first_name', u.f_name,
+                'last_name', u.l_name,
+                'email', u.email,
+                'committee_name', c.name,
+                'committee_role', cm.role
+            ))
+            FROM tbl_committee_members cm
+            JOIN tbl_committee c ON cm.committee_id = c.committee_id
+            JOIN tbl_user u ON cm.user_id = u.user_id
+            WHERE c.organization_id = @org_id
+                AND c.cycle_number = @current_cycle
+        ),
+        'committee_roles', (
+            SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                'committee_name', c.name,
+                'role_name', cr.role_name
+            ))
+            FROM tbl_committee_role cr
+            JOIN tbl_committee c ON cr.committee_id = c.committee_id
+            WHERE c.organization_id = @org_id
+                AND c.cycle_number = @current_cycle
+        )
+    ) AS result
+    FROM tbl_organization o
+    JOIN tbl_user adv ON o.adviser_id = adv.user_id
+    WHERE o.organization_id = @org_id;
+END$$
 
 DELIMITER ;
 
@@ -3083,7 +3252,7 @@ INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUE
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
-("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
+("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 5);
 
 
 INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
@@ -3093,9 +3262,9 @@ INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
 (4, 'Treasurer', 'Financial manager'),
 (5, 'Officer', 'General executive member');
 
--- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
--- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
--- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
 -- -- Insert events first
 -- INSERT INTO tbl_event (
@@ -3121,9 +3290,9 @@ INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
 -- (1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
 
 
-INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
+-- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+-- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
+-- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
 
 INSERT INTO tbl_event (
