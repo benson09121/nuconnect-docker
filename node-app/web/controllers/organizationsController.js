@@ -235,9 +235,9 @@ async function archiveOrganization(req, res) {
         if (!organization_id) {
             return res.status(400).json({ message: 'Organization ID is required.' });
         }
-        // Lookup user by email
+        // Lookup user_id by email (optimized)
         const user = await organizationsModel.getUserByEmail(req.user.email);
-        if (!user) {
+        if (!user || !user.user_id) {
             return res.status(404).json({ message: 'User not found.' });
         }
         await organizationsModel.archiveOrganization(organization_id, user.user_id);
@@ -255,9 +255,9 @@ async function unarchiveOrganization(req, res) {
         if (!organization_id) {
             return res.status(400).json({ message: 'Organization ID is required.' });
         }
-        // Lookup user by email
+        // Lookup user_id by email (optimized)
         const user = await organizationsModel.getUserByEmail(req.user.email);
-        if (!user) {
+        if (!user || !user.user_id) {
             return res.status(404).json({ message: 'User not found.' });
         }
         await organizationsModel.unarchiveOrganization(organization_id, user.user_id);
@@ -265,6 +265,21 @@ async function unarchiveOrganization(req, res) {
     } catch (error) {
         res.status(500).json({
             error: error.message || "An error occurred while unarchiving the organization.",
+        });
+    }
+}
+
+async function getOrganizationsByStatus(req, res) {
+    try {
+        const { status } = req.query;
+        if (!status) {
+            return res.status(400).json({ error: "Status is required." });
+        }
+        const organizations = await organizationsModel.getOrganizationsByStatus(status);
+        res.json(organizations);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching organizations by status.",
         });
     }
 }
@@ -282,5 +297,6 @@ module.exports = {
     checkOrganizationName,
     checkOrganizationEmails,
     archiveOrganization,
-    unarchiveOrganization
+    unarchiveOrganization,
+    getOrganizationsByStatus,
 };

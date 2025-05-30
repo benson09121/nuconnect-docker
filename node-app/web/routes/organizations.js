@@ -4,6 +4,7 @@ const organizationsController = require('../../web/controllers/organizationsCont
 const middleware = require('../../middlewares/middleWare');
 
 // router.get('/organizations', middleware.validateAzureJWT, middleware.hasPermission("VIEW_ORGANIZATION"), organizationsController.getOrganizations);
+router.get('/organizations-by-status', middleware.validateAzureJWT, middleware.hasPermission("VIEW_ORGANIZATION"), organizationsController.getOrganizationsByStatus);
 router.post('/organizations', middleware.validateAzureJWT, organizationsController.createOrganizationApplication);
 router.get('/getSpecificApplication', middleware.validateAzureJWT, organizationsController.getSpecificApplication);
 router.get('/org-applications', middleware.validateAzureJWT, organizationsController.getOrganizationApplications);
