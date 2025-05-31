@@ -73,7 +73,7 @@ CREATE TABLE tbl_organization(
     description TEXT,
     base_program_id INT NULL, -- NULL meaning open to all
     logo VARCHAR(255),
-    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal') DEFAULT 'Pending',
+    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal', 'Archived') DEFAULT 'Pending',
     membership_fee_type ENUM('Per Term', 'Whole Academic Year',"Free") NOT NULL DEFAULT 'Free',
     category ENUM('Co-Curricular Organization', 'Extra Curricular Organization') DEFAULT 'Co-Curricular Organization',
     membership_fee_amount DECIMAL(10,2) NULL,
@@ -250,7 +250,7 @@ CREATE TABLE tbl_event (
     title VARCHAR(300) NOT NULL,
     description TEXT NOT NULL,
     venue_type ENUM('Face to face', 'Online') DEFAULT 'face to face',
-    venue VARCHAR(200) NOT NULL,
+    venue VARCHAR(200) NULL,
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
     start_time TIME NOT NULL,
@@ -305,19 +305,6 @@ CREATE TABLE tbl_event_approval_process (
         REFERENCES tbl_event_application(event_application_id),
     FOREIGN KEY (approver_id) REFERENCES tbl_user(user_id),
     FOREIGN KEY (approval_role_id) REFERENCES tbl_role(role_id)
-);
-
-
-CREATE TABLE tbl_event_application_submission (
-    submission_id INT AUTO_INCREMENT PRIMARY KEY,
-    event_application_id INT,
-    requirement_id INT NOT NULL,
-    file_path VARCHAR(255) NOT NULL,
-    submitted_by VARCHAR(200) NOT NULL,
-    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (event_application_id) REFERENCES tbl_event_application(event_application_id),
-    FOREIGN KEY (requirement_id) REFERENCES tbl_event_application_requirement(requirement_id),
-    FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id)
 );
 
 CREATE TABLE tbl_event_requirement_submissions (
@@ -4409,6 +4396,245 @@ END $$
 
 DELIMITER ;
 
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationEventApplications(
+    IN p_org_name VARCHAR(100)
+)
+BEGIN
+    DECLARE v_organization_id INT;
+
+    -- Lookup organization_id from name
+    SELECT organization_id INTO v_organization_id
+    FROM tbl_organization
+    WHERE name = p_org_name
+    LIMIT 1;
+
+    IF v_organization_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Organization not found';
+    END IF;
+
+    -- Get all event applications for the organization, with event and applicant details
+    SELECT 
+        ea.event_application_id,
+        ea.organization_id,
+        o.name AS organization_name,
+        o.adviser_id,
+        CONCAT(adviser.f_name, ' ', adviser.l_name) AS adviser_name,
+        ea.cycle_number,
+        rc.start_date AS cycle_start_date,
+        ea.proposed_event_id,
+        e.title AS event_title,
+        e.description AS event_description,
+        e.venue_type,
+        e.venue,
+        e.start_date,
+        e.end_date,
+        e.start_time,
+        e.end_time,
+        e.status AS event_status,
+        e.type,
+        e.is_open_to,
+        e.fee,
+        e.capacity,
+        e.created_at AS event_created_at,
+        ea.applicant_user_id,
+        CONCAT(applicant.f_name, ' ', applicant.l_name) AS applicant_name,
+        applicant.email AS applicant_email,
+        ea.status AS application_status,
+        ea.created_at AS application_created_at,
+        ea.updated_at AS application_updated_at
+    FROM tbl_event_application ea
+    JOIN tbl_organization o ON ea.organization_id = o.organization_id
+    LEFT JOIN tbl_event e ON ea.proposed_event_id = e.event_id
+    JOIN tbl_renewal_cycle rc ON ea.organization_id = rc.organization_id 
+        AND ea.cycle_number = rc.cycle_number
+    JOIN tbl_user applicant ON ea.applicant_user_id = applicant.user_id
+    JOIN tbl_user adviser ON o.adviser_id = adviser.user_id
+    WHERE ea.organization_id = v_organization_id
+    ORDER BY ea.created_at DESC;
+
+    -- Get all submitted requirements/files for all applications of this organization
+    SELECT 
+        ers.submission_id,
+        ers.event_application_id,
+        ers.requirement_id,
+        ear.requirement_name,
+        ear.is_applicable_to,
+        ers.file_path,
+        ers.submitted_by,
+        CONCAT(u.f_name, ' ', u.l_name) AS submitted_by_name,
+        ers.submitted_at
+    FROM tbl_event_requirement_submissions ers
+    JOIN tbl_event_application_requirement ear ON ers.requirement_id = ear.requirement_id
+    JOIN tbl_user u ON ers.submitted_by = u.user_id
+    WHERE ers.organization_id = v_organization_id
+    ORDER BY ers.event_application_id, ear.is_applicable_to, ear.requirement_name;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventRequirementSubmissionsByOrganization(
+    IN p_organization_id INT
+)
+BEGIN
+    SELECT
+        ers.submission_id,
+        ers.event_id,
+        e.title AS event_title,
+        ers.event_application_id,
+        ers.cycle_number,
+        ers.organization_id,
+        o.name AS organization_name,
+        ers.requirement_id,
+        req.requirement_name,
+        req.is_applicable_to,
+        ers.file_path,
+        ers.submitted_by,
+        u.f_name AS submitted_by_first_name,
+        u.l_name AS submitted_by_last_name,
+        u.email AS submitted_by_email,
+        ers.submitted_at
+    FROM tbl_event_requirement_submissions ers
+    LEFT JOIN tbl_event e ON ers.event_id = e.event_id
+    LEFT JOIN tbl_organization o ON ers.organization_id = o.organization_id
+    LEFT JOIN tbl_event_application_requirement req ON ers.requirement_id = req.requirement_id
+    LEFT JOIN tbl_user u ON ers.submitted_by = u.user_id
+    WHERE ers.organization_id = p_organization_id
+    ORDER BY ers.submitted_at DESC;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationDashboardStats(
+    IN p_organization_id INT
+)
+BEGIN
+    DECLARE v_current_cycle INT;
+
+    -- Get current cycle
+    SELECT MAX(cycle_number) INTO v_current_cycle
+    FROM tbl_renewal_cycle
+    WHERE organization_id = p_organization_id;
+
+    -- Total members (excluding executives and committee members)
+    SELECT COUNT(*) INTO @total_members
+    FROM tbl_organization_members om
+    WHERE om.organization_id = p_organization_id
+      AND om.cycle_number = v_current_cycle
+      AND om.member_type = 'Member'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM tbl_committee_members cm
+          JOIN tbl_committee c ON cm.committee_id = c.committee_id
+          WHERE c.organization_id = p_organization_id
+            AND c.cycle_number = v_current_cycle
+            AND cm.user_id = om.user_id
+      );
+
+    -- Total events
+    SELECT COUNT(*) INTO @total_events
+    FROM tbl_event
+    WHERE organization_id = p_organization_id;
+
+    -- Total upcoming events
+    SELECT COUNT(*) INTO @total_upcoming_events
+    FROM tbl_event
+    WHERE organization_id = p_organization_id
+      AND start_date >= CURDATE();
+
+    -- Total post-event reports submitted
+    SELECT COUNT(*) INTO @total_reports
+    FROM tbl_event_requirement_submissions ers
+    JOIN tbl_event_application_requirement ear ON ers.requirement_id = ear.requirement_id
+    WHERE ers.organization_id = p_organization_id
+      AND ear.is_applicable_to = 'post-event';
+
+    -- Total pre-event requirements submitted
+    SELECT COUNT(*) INTO @pre_event_requirements_submitted
+    FROM tbl_event_requirement_submissions ers
+    JOIN tbl_event_application_requirement ear ON ers.requirement_id = ear.requirement_id
+    WHERE ers.organization_id = p_organization_id
+      AND ear.is_applicable_to = 'pre-event';
+
+    -- Return as one row
+    SELECT
+        @total_members AS total_members,
+        @total_events AS total_events,
+        @total_reports AS total_reports,
+        @pre_event_requirements_submitted AS pre_event_requirements_submitted,
+        @total_upcoming_events AS total_upcoming_events;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE CreateSDAOEvent(
+    IN p_organization_id INT,
+    IN p_user_id VARCHAR(200),
+    IN p_title VARCHAR(300),
+    IN p_description TEXT,
+    IN p_venue_type ENUM('Face to face', 'Online'),
+    IN p_venue VARCHAR(200),
+    IN p_start_date DATE,
+    IN p_end_date DATE,
+    IN p_start_time TIME,
+    IN p_end_time TIME,
+    IN p_status ENUM('Pending', 'Approved', 'Rejected', 'Archived'),
+    IN p_type ENUM('Paid', 'Free'),
+    IN p_is_open_to ENUM('Members only', 'Open to all', 'NU Students only'),
+    IN p_fee INT,
+    IN p_capacity INT,
+    IN p_certificate VARCHAR(1000)
+)
+BEGIN
+    INSERT INTO tbl_event (
+        organization_id,
+        user_id,
+        title,
+        description,
+        venue_type,
+        venue,
+        start_date,
+        end_date,
+        start_time,
+        end_time,
+        status,
+        type,
+        is_open_to,
+        fee,
+        capacity,
+        certificate
+    ) VALUES (
+        p_organization_id,
+        p_user_id,
+        p_title,
+        p_description,
+        p_venue_type,
+        p_venue,
+        p_start_date,
+        p_end_date,
+        p_start_time,
+        p_end_time,
+        p_status,
+        p_type,
+        p_is_open_to,
+        p_fee,
+        p_capacity,
+        p_certificate
+    );
+
+    SELECT * FROM tbl_event WHERE event_id = LAST_INSERT_ID();
+END$$
+
+DELIMITER ;
+
 
 
 -- INDEXES
@@ -4507,11 +4733,12 @@ INSERT INTO tbl_program (name, description) VALUES
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
 ("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 1),
-("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 5),
-("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
+("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 6),
+("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,5),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
 ("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
+
 
 
 INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
@@ -4523,6 +4750,7 @@ INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
 
 
 INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "NU Dasmariñas Student Development and Activities Office", "SDAO", null, "Approved", "Whole Academic Year", 0, 0, 1),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 

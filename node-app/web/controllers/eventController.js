@@ -599,6 +599,41 @@ async function uploadOrUpdatePostEventRequirement(req, res) {
   }
 }
 
+async function createEvent(req, res) {
+    try {
+        console.log("Incoming event creation request:", req.body);
+        const event = req.body;
+
+        // Look up user_id from user_email if needed
+        let user_id = event.user_id;
+        if (!user_id && event.user_email) {
+            const user = await eventModel.getUserByEmail(event.user_email);
+            if (!user) {
+                return res.status(404).json({ message: "User not found for the provided email." });
+            }
+            user_id = user.user_id;
+        }
+        if (!user_id) {
+            return res.status(400).json({ message: "user_id (or user_email) is required." });
+        }
+        event.user_id = user_id;
+
+        // Clean up fields
+        event.venue = event.venue || null;
+        event.certificate = event.certificate ? String(event.certificate) : null;
+        event.capacity = event.capacity === "" ? null : event.capacity;
+        event.fee = event.fee === "" ? null : event.fee;
+
+        const createdEvent = await eventModel.createEvent(event);
+        res.status(201).json({ message: 'Event created successfully', event: createdEvent });
+    } catch (error) {
+        console.error("Error creating event:", error); // <-- Add this for debugging
+        res.status(500).json({
+            error: error.message || "An error occurred while creating the event.",
+        });
+    }
+}
+
 module.exports = {
     addEvent,
     getEventRequirements,
@@ -622,5 +657,6 @@ module.exports = {
     rejectEventApplication,
     getEventEvaluationConfig,
     updateEventEvaluationConfig,
-    uploadOrUpdatePostEventRequirement
+    uploadOrUpdatePostEventRequirement,
+    createEvent,
 };

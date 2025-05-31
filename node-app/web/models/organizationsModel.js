@@ -171,6 +171,65 @@ async function getOrganizationsByStatus(status) {
         connection.release();
     }
 }
+
+async function getOrganizationEventApplications(org_name) {
+    const connection = await pool.getConnection();
+    try {
+        const [results] = await connection.query('CALL GetOrganizationEventApplications(?);', [org_name]);
+        // MySQL returns multiple result sets for multi-SELECT procs
+        return {
+            applications: results[0],
+            submissions: results[1]
+        };
+    } catch (error) {
+        console.error('Error fetching organization event applications:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function getEventRequirementSubmissionsByOrganization(organization_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetEventRequirementSubmissionsByOrganization(?);', [organization_id]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching event requirement submissions by organization:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function getOrganizationIdByName(org_name) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'SELECT organization_id FROM tbl_organization WHERE name = ? LIMIT 1',
+            [org_name]
+        );
+        return rows[0] ? rows[0].organization_id : null;
+    } catch (error) {
+        console.error('Error fetching organization_id by name:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function getOrganizationDashboardStats(organization_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizationDashboardStats(?);', [organization_id]);
+        return rows[0][0]; // Single row with stats
+    } catch (error) {
+        console.error('Error fetching organization dashboard stats:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
       
 module.exports = {
     getOrganizations,
@@ -186,4 +245,8 @@ module.exports = {
     archiveOrganization,
     unarchiveOrganization,
     getOrganizationsByStatus,
+    getOrganizationEventApplications,
+    getEventRequirementSubmissionsByOrganization,
+    getOrganizationIdByName,
+    getOrganizationDashboardStats,
 };
