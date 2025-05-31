@@ -299,6 +299,73 @@ async function getOrganizationsByStatus(req, res) {
     }
 }
 
+async function getOrganizationEventApplications(req, res) {
+    try {
+        const org_name = req.query.org_name;
+        if (!org_name) {
+            return res.status(400).json({ message: 'org_name is required.' });
+        }
+        const result = await organizationsModel.getOrganizationEventApplications(org_name);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching organization event applications.",
+        });
+    }
+}
+
+async function getEventRequirementSubmissionsByOrganization(req, res) {
+    try {
+        let organization_id = parseInt(req.query.organization_id);
+        const org_name = req.query.org_name;
+
+        // If org_name is provided, look up organization_id using the model function
+        if (!organization_id && org_name) {
+            organization_id = await organizationsModel.getOrganizationIdByName(org_name);
+            if (!organization_id) {
+                return res.status(404).json({ message: 'Organization not found.' });
+            }
+        }
+
+        if (!organization_id) {
+            return res.status(400).json({ message: 'organization_id or org_name is required.' });
+        }
+
+        const submissions = await organizationsModel.getEventRequirementSubmissionsByOrganization(organization_id);
+        res.json(submissions);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching event requirement submissions by organization.",
+        });
+    }
+}
+
+async function getOrganizationDashboardStats(req, res) {
+    try {
+        let organization_id = parseInt(req.query.organization_id);
+        const org_name = req.query.org_name;
+
+        // If org_name is provided, look up organization_id using the model function
+        if (!organization_id && org_name) {
+            organization_id = await organizationsModel.getOrganizationIdByName(org_name);
+            if (!organization_id) {
+                return res.status(404).json({ message: 'Organization not found.' });
+            }
+        }
+
+        if (!organization_id) {
+            return res.status(400).json({ message: 'organization_id or org_name is required.' });
+        }
+
+        const stats = await organizationsModel.getOrganizationDashboardStats(organization_id);
+        res.json(stats);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching organization dashboard stats.",
+        });
+    }
+}
+
 
 module.exports = {
     getOrganizations,
@@ -315,4 +382,7 @@ module.exports = {
     archiveOrganization,
     unarchiveOrganization,
     getOrganizationsByStatus,
+    getOrganizationEventApplications,
+    getEventRequirementSubmissionsByOrganization,
+    getOrganizationDashboardStats,
 };

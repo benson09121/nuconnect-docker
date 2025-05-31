@@ -367,6 +367,36 @@ async function getEventRequirementSubmissions({
   }
 }
 
+async function createEvent(event) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'CALL CreateSDAOEvent(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
+            [
+                event.organization_id,
+                event.user_id,
+                event.title,
+                event.description,
+                event.venue_type,
+                event.venue || null,
+                event.start_date,
+                event.end_date,
+                event.start_time,
+                event.end_time,
+                event.status,
+                event.type,
+                event.is_open_to,
+                event.fee === "" ? null : event.fee,
+                event.capacity === "" ? null : event.capacity,
+                event.certificate ? String(event.certificate) : null
+            ]
+        );
+        return rows[0][0];
+    } finally {
+        connection.release();
+    }
+}
+
 module.exports = {
     addEvent,
     getEventRequirements,
@@ -394,4 +424,5 @@ module.exports = {
     updateEventEvaluationConfig,
     uploadOrUpdatePostEventRequirement,
     getEventRequirementSubmissions,
+    createEvent,
 };

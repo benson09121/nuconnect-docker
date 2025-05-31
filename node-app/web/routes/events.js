@@ -25,6 +25,12 @@ router.post(
 );
 
 router.post('/events', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_EVENTS"), eventController.addEvent);
+router.post(
+  '/events-SDAO',
+  middleware.validateAzureJWT,
+  middleware.hasPermission("CREATE_EVENT"),
+  eventController.createEvent
+);
 router.get('/events', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEvents);
 router.get('/events/past', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getPastEvents);
 router.get('/events/evaluation-questions', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getAllEvaluationQuestions);
