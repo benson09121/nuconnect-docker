@@ -21,9 +21,19 @@ async function getUserOrganization() {
         connection.release();
     }
 }
+async function getOrganizationQuestion(org_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizationQuestion(?);', [org_id]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
 
 module.exports = {
     getOrganizations,
-    getUserOrganization
+    getUserOrganization,
+    getOrganizationQuestion
 };
 
