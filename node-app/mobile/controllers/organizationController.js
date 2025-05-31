@@ -19,8 +19,18 @@ async function getUserOrganization(req, res) {
         res.status(500).json({ message: error.message });
     }
 }
+async function getOrganizationQuestion(req,res){
+    const { org_id } = req.query;
+    try {
+        const organizationQuestions = await organizationModel.getOrganizationQuestion(org_id);
+        res.json(organizationQuestions);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+}
 
 module.exports = {
     getOrganizations,
-    getUserOrganization
+    getUserOrganization,
+    getOrganizationQuestion
 }

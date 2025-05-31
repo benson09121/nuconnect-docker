@@ -159,10 +159,10 @@ async function getCertificateTemplate(event_id) {
     }
 }
 
-async function addGeneratedCertificate({ event_id, template_id, pdfPath, verification_code }) {
+async function addGeneratedCertificate({ event_id, template_id, pdfFilename, verification_code }) {
     const connection = await pool.getConnection();
     try{
-    const [rows] = await connection.query('CALL AddGeneratedCertificate(?, ?, ?, ?, ?);', [event_id, Auth.get_userId ,template_id, pdfPath, verification_code]); // Ensure only 5 arguments are passed
+    const [rows] = await connection.query('CALL AddGeneratedCertificate(?, ?, ?, ?, ?);', [event_id, Auth.get_userId ,template_id, pdfFilename, verification_code]); // Ensure only 5 arguments are passed
     return rows[0];
     }
     finally{
@@ -190,6 +190,15 @@ async function submitEvaluation(response) {
         connection.release();
     }
 }
+async function getAllEventCertificates() {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetAllEventCertificates(?);', [Auth.get_userId]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
 
 module.exports = {
     getAllEvents,
@@ -207,4 +216,5 @@ module.exports = {
     addGeneratedCertificate,
     getEvaluation,
     submitEvaluation,
+    getAllEventCertificates
 };

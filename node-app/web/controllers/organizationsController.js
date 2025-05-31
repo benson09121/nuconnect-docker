@@ -170,7 +170,6 @@ async function rejectApplication(req, res) {
 async function getOrganizationRequirement(req, res) {
     const requirement_name  = req.query.requirement_name;
     let org_name = req.query.org_name;
-    // org_name = org_name ? org_name.toLowerCase().replace(/ /g, '-') : org_name;
     org_name = encodeURIComponent(org_name);  
     try {
         
@@ -190,10 +189,8 @@ async function getOrganizationRequirement(req, res) {
 async function getOrganizationLogo(req, res) {
     let org_name = req.query.org_name;
     let logo_name = req.query.logo_name;
-    // org_name = org_name ? org_name.toLowerCase().replace(/ /g, '-') : org_name;
     const org_name_encoded = encodeURIComponent(org_name);
     try {
-        // Set CORS header for browser access
         res.header('Access-Control-Allow-Origin', 'http://localhost:5173');
         // Set Content-Disposition so browser handles as image (inline) 
         res.setHeader('Content-Disposition', `inline; filename="${logo_name}"`);

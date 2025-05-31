@@ -7,6 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const { Auth } = require("../models/userIdModel");
 const TemplateHandler = require('easy-template-x').TemplateHandler;
 const convertDocxToPdf = require('../../config/convertToPdf');
+const { get } = require('http');
 
 async function getEvents(req, res) {
     try {
@@ -173,7 +174,7 @@ async function addCertificate(req, res) {
 
         // Validate file type
         if (!uploadedFile.mimetype.includes('application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/octet-stream')) {
+            'application/octet-stream')) {
             console.error('addCertificate: Invalid file type:', uploadedFile.mimetype);
             return res.status(400).json({ message: 'Only .docx files allowed' });
         }
@@ -201,7 +202,7 @@ async function addCertificate(req, res) {
 
         // Database insert
         console.log('addCertificate: Inserting template path into database');
-        await eventModel.AddCertificateTemplate(event_id, templatePath);
+        await eventModel.AddCertificateTemplate(event_id, filename);
         console.log('addCertificate: Database insert successful');
 
         res.status(201).json({ path: templatePath });
@@ -216,13 +217,13 @@ async function addGeneratedCertificate(req) {
         const { event_id } = req.body;
         const verification_code = uuidv4();
 
-        // Get certificate template
+        console.log('addGeneratedCertificate: Fetching certificate template for event_id:', event_id);
         const template = await eventModel.getCertificateTemplate(event_id);
         if (!template || !template[0]) throw new Error('No template found for this event');
-        const templatePath = template[0].template_path;
-
-        // Validate and process DOCX template
-        const templateContent = fs.readFileSync(templatePath);
+        const templatePath = `/app/certificates/templates/${template[0].template_path}`;
+        console.log('addGeneratedCertificate: Template path:', templatePath);
+        console.log('addGeneratedCertificate: Reading template file:', templatePath);
+        const templateContent = await fs.promises.readFile(templatePath);
         if (!templateContent || templateContent.length === 0) {
             throw new Error('Template file is empty or corrupted');
         }
@@ -238,24 +239,31 @@ async function addGeneratedCertificate(req) {
         const docxPath = path.join("/app/certificates/templates", `${baseFilename}_${verification_code}.docx`);
         const pdfFilename = `${baseFilename}_${verification_code}.pdf`;
         const pdfPath = `/app/certificates/generated/${pdfFilename}`;
+        console.log(pdfFilename);
 
-        // Save temporary DOCX
         const handler = new TemplateHandler(templateContent);
         const doc = await handler.process(templateContent, data);
-        fs.writeFileSync(docxPath, doc);
+
+
+        await fs.promises.writeFile(docxPath, doc);
+
 
         await convertDocxToPdf(docxPath, pdfPath);
-        fs.unlinkSync(docxPath);
+
+
+        await fs.promises.unlink(docxPath);
 
         // Database insert
         const template_id = template[0].template_id;
+
         await eventModel.addGeneratedCertificate({
             event_id,
             template_id,
-            pdfPath,
+            pdfFilename,
             verification_code,
         });
 
+        console.log('addGeneratedCertificate: Certificate generation complete:', pdfPath);
         return { message: 'Certificate generated successfully', path: pdfPath };
     } catch (error) {
         console.error('addGeneratedCertificate: Error:', error.message);
@@ -263,7 +271,7 @@ async function addGeneratedCertificate(req) {
     }
 }
 
-async function getEvaluation(req,res) {
+async function getEvaluation(req, res) {
     try {
         const event_id = parseInt(req.params.eventId, 10);
         const evaluation = await eventModel.getEvaluation(event_id);
@@ -274,8 +282,8 @@ async function getEvaluation(req,res) {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-  }
-  
+}
+
 async function submitEvaluation(req, res) {
     try {
         const response = req.body;
@@ -295,6 +303,35 @@ async function submitEvaluation(req, res) {
     }
 }
 
+async function getAllEventCertificates(req, res) {
+    try {
+        const certificates = await eventModel.getAllEventCertificates();
+        if (!certificates || certificates.length === 0) {
+            return res.status(404).json({ message: 'No certificates found for this event' });
+        }
+        res.json(certificates);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+}
+
+async function getEventCertificate(req, res) {
+    const certificate_name  = req.query.certificate_name;
+    try {
+        res.setHeader('X-Accel-Redirect', `/protected-certificates/generated/${certificate_name}`);
+
+        // Use the original filename if available, fallback to template_name
+        res.setHeader('Content-Disposition', `attachment; filename="hulu"`);
+        // Optionally, send a short message for debugging (remove in production)
+        // res.end('File download triggered');
+        res.end();
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the requirements.",
+        });
+    }
+}
+
 module.exports = {
     getEvents,
     createEvent,
@@ -308,4 +345,6 @@ module.exports = {
     addGeneratedCertificate,
     getEvaluation,
     submitEvaluation,
+    getEventCertificate,
+    getAllEventCertificates
 };
