@@ -3959,6 +3959,7 @@ CREATE DEFINER='admin'@'%' PROCEDURE UploadOrUpdatePostEventRequirement(
     IN p_submitted_by VARCHAR(200)
 )
 BEGIN
+    -- All DECLAREs must be here, before any other statement!
     DECLARE v_event_application_id INT;
     DECLARE v_submission_id INT;
 
@@ -4015,9 +4016,9 @@ DELIMITER $$
 
 CREATE DEFINER='admin'@'%' PROCEDURE GetEventRequirementSubmissions(
     IN p_event_id INT,
-    IN p_event_application_id INT DEFAULT NULL,
-    IN p_requirement_id INT DEFAULT NULL,
-    IN p_submitted_by VARCHAR(200) DEFAULT NULL
+    IN p_event_application_id INT,
+    IN p_requirement_id INT,
+    IN p_submitted_by VARCHAR(200)
 )
 BEGIN
     SELECT
@@ -4050,6 +4051,364 @@ BEGIN
 END$$
 
 DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetActiveApplicationPeriodSimple()
+BEGIN
+    SELECT *
+    FROM tbl_application_period
+    WHERE is_active = 1
+    ORDER BY created_at DESC
+    LIMIT 1;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationsByStatus(
+    IN p_status ENUM('Pending', 'Approved', 'Rejected', 'Renewal', 'Archived')
+)
+BEGIN
+    SELECT 
+        o.organization_id,
+        o.adviser_id,
+        o.name AS organization_name,
+        o.description,
+        o.base_program_id,
+        o.logo,
+        o.status,
+        o.membership_fee_type,
+        o.membership_fee_amount,
+        o.is_recruiting,
+        o.is_open_to_all_courses,
+        o.category,
+        o.created_at,
+        -- Main/base program (if any)
+        p.program_id AS base_program_id,
+        p.name AS base_program_name,
+        p.description AS base_program_description,
+        -- All additional programs (if any, as JSON array)
+        (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'program_id', pr.program_id,
+                    'program_name', pr.name,
+                    'program_description', pr.description
+                )
+            )
+            FROM tbl_organization_course oc
+            JOIN tbl_program pr ON oc.program_id = pr.program_id
+            WHERE oc.organization_id = o.organization_id
+        ) AS additional_programs
+    FROM tbl_organization o
+    LEFT JOIN tbl_program p ON o.base_program_id = p.program_id
+    WHERE o.status = p_status
+    ORDER BY o.created_at DESC;
+END $$
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE ArchiveOrganization(
+    IN p_organization_id INT,
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    -- Update organization status to 'Archived'
+    UPDATE tbl_organization
+    SET status = 'Archived'
+    WHERE organization_id = p_organization_id;
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type,
+        meta_data
+    ) VALUES (
+        p_user_id,
+        CONCAT('Archived organization ID ', p_organization_id),
+        'organization',
+        JSON_OBJECT('organization_id', p_organization_id, 'archived_at', NOW())
+    );
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE UnarchiveOrganization(
+    IN p_organization_id INT,
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    -- Unarchive organization (set status to 'Approved', or change as needed)
+    UPDATE tbl_organization
+    SET status = 'Approved'
+    WHERE organization_id = p_organization_id
+      AND status = 'Archived';
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type,
+        meta_data
+    ) VALUES (
+        p_user_id,
+        CONCAT('Unarchived organization ID ', p_organization_id),
+        'organization',
+        JSON_OBJECT('organization_id', p_organization_id, 'unarchived_at', NOW())
+    );
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE TerminateActiveApplicationPeriod(
+    IN p_user_id VARCHAR(200)
+)
+BEGIN
+    DECLARE v_affected_rows INT DEFAULT 0;
+
+    -- Terminate all currently active periods
+    UPDATE tbl_application_period
+    SET is_active = 0
+    WHERE is_active = 1;
+
+    SET v_affected_rows = ROW_COUNT();
+
+    -- Log the action if any period was terminated
+    IF v_affected_rows > 0 THEN
+        INSERT INTO tbl_logs (
+            user_id,
+            action,
+            type,
+            meta_data
+        ) VALUES (
+            p_user_id,
+            'Terminated active application period(s)',
+            'application_period',
+            JSON_OBJECT('terminated_count', v_affected_rows, 'terminated_at', NOW())
+        );
+    END IF;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetAllPeriodsWithApplications()
+BEGIN
+    SELECT 
+        ap.period_id,
+        ap.start_date,
+        ap.end_date,
+        ap.start_time,
+        ap.end_time,
+        ap.is_active,
+        ap.created_by,
+        ap.created_at,
+        ap.updated_at,
+        (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'application_id', a.application_id,
+                    'organization_id', a.organization_id,
+                    'cycle_number', a.cycle_number,
+                    'application_type', a.application_type,
+                    'applicant_user_id', a.applicant_user_id,
+                    'status', a.status,
+                    'created_at', a.created_at,
+                    'updated_at', a.updated_at,
+                    'organization_name', o.name,
+                    'category', o.category
+                )
+            )
+            FROM tbl_application a
+            LEFT JOIN tbl_organization o ON a.organization_id = o.organization_id
+            WHERE a.period_id = ap.period_id
+        ) AS applications
+    FROM tbl_application_period ap
+    ORDER BY ap.start_date DESC, ap.period_id DESC;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventRequirements()
+BEGIN
+    SELECT * FROM tbl_event_application_requirement;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE SaveEventRequirements(
+    IN p_user_id VARCHAR(200),
+    IN p_requirements JSON
+)
+BEGIN
+    DECLARE i INT DEFAULT 0;
+    DECLARE req_count INT;
+    DECLARE v_req_id INT;
+    DECLARE v_req_name VARCHAR(255);
+    DECLARE v_req_type ENUM('pre-event', 'post-event');
+    DECLARE v_file_path VARCHAR(255);
+
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE del_req_id INT;
+    DECLARE del_req_name VARCHAR(255);
+    DECLARE del_cursor CURSOR FOR SELECT requirement_id FROM tmp_existing_ids;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    -- 1. Collect all current requirement_ids
+    DROP TEMPORARY TABLE IF EXISTS tmp_existing_ids;
+    CREATE TEMPORARY TABLE IF NOT EXISTS tmp_existing_ids (requirement_id INT PRIMARY KEY);
+    INSERT INTO tmp_existing_ids (requirement_id)
+        SELECT requirement_id FROM tbl_event_application_requirement;
+
+    SET req_count = JSON_LENGTH(p_requirements);
+
+    -- 2. Add or update requirements
+    WHILE i < req_count DO
+        SET v_req_id = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_id')));
+        SET v_req_name = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].requirement_name')));
+        SET v_req_type = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].is_applicable_to')));
+        SET v_file_path = JSON_UNQUOTE(JSON_EXTRACT(p_requirements, CONCAT('$[', i, '].file_path')));
+
+        IF v_req_id IS NULL OR v_req_id = '' OR v_req_id = 'null' THEN
+            -- Add new requirement
+            INSERT INTO tbl_event_application_requirement (
+                requirement_name, is_applicable_to, file_path, created_by
+            ) VALUES (
+                v_req_name, v_req_type, v_file_path, p_user_id
+            );
+
+            -- Log add
+            INSERT INTO tbl_logs (user_id, action, type, meta_data)
+            VALUES (
+                p_user_id,
+                CONCAT('Added event requirement: ', v_req_name),
+                'event_requirement',
+                JSON_OBJECT('requirement_name', v_req_name, 'is_applicable_to', v_req_type)
+            );
+        ELSE
+            -- Update existing requirement
+            UPDATE tbl_event_application_requirement
+            SET requirement_name = v_req_name,
+                is_applicable_to = v_req_type,
+                file_path = v_file_path,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE requirement_id = v_req_id;
+
+            -- Log update
+            INSERT INTO tbl_logs (user_id, action, type, meta_data)
+            VALUES (
+                p_user_id,
+                CONCAT('Updated event requirement: ', v_req_name),
+                'event_requirement',
+                JSON_OBJECT('requirement_id', v_req_id, 'requirement_name', v_req_name, 'is_applicable_to', v_req_type)
+            );
+        END IF;
+
+        -- Remove from deletion candidates
+        IF v_req_id IS NOT NULL AND v_req_id != '' THEN
+            DELETE FROM tmp_existing_ids WHERE requirement_id = v_req_id;
+        END IF;
+
+        SET i = i + 1;
+    END WHILE;
+
+    -- 3. Delete requirements not in the new list and log deletions
+    OPEN del_cursor;
+    del_loop: LOOP
+        FETCH del_cursor INTO del_req_id;
+        IF done THEN
+            LEAVE del_loop;
+        END IF;
+
+        -- Get name for logging
+        SELECT requirement_name INTO del_req_name FROM tbl_event_application_requirement WHERE requirement_id = del_req_id;
+
+        DELETE FROM tbl_event_application_requirement WHERE requirement_id = del_req_id;
+
+        -- Log deletion
+        INSERT INTO tbl_logs (user_id, action, type, meta_data)
+        VALUES (
+            p_user_id,
+            CONCAT('Deleted event requirement: ', del_req_name),
+            'event_requirement',
+            JSON_OBJECT('requirement_id', del_req_id, 'requirement_name', del_req_name)
+        );
+    END LOOP;
+    CLOSE del_cursor;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_existing_ids;
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventEvaluationResponsesByGroup(
+    IN p_event_id INT
+)
+BEGIN
+    SELECT 
+        JSON_ARRAYAGG(
+            JSON_OBJECT(
+                'group_title', qg.group_title,
+                'group_description', qg.group_description,
+                'questions', (
+                    SELECT JSON_ARRAYAGG(
+                        JSON_OBJECT(
+                            'question_id', q.question_id,
+                            'question_text', q.question_text,
+                            'question_type', q.question_type,
+                            'responses', (
+                                SELECT JSON_ARRAYAGG(
+                                    JSON_OBJECT(
+                                        'user_id', u.user_id,
+                                        'attendee_name', CONCAT(u.f_name, ' ', u.l_name),
+                                        'response_value', r.response_value,
+                                        'response_time', r.created_at
+                                    )
+                                )
+                                FROM tbl_evaluation_response r
+                                JOIN tbl_evaluation e ON r.evaluation_id = e.evaluation_id
+                                JOIN tbl_user u ON e.user_id = u.user_id
+                                WHERE r.question_id = q.question_id
+                                AND e.event_id = p_event_id
+                            )
+                        )
+                    )
+                    FROM tbl_evaluation_question q
+                    WHERE q.group_id = qg.group_id
+                )
+            )
+        ) AS evaluation_responses
+    FROM 
+        tbl_evaluation_question_group qg
+    WHERE 
+        EXISTS (
+            SELECT 1
+            FROM tbl_event_evaluation_config ec
+            WHERE ec.event_id = p_event_id
+            AND ec.group_id = qg.group_id
+        )
+    ORDER BY 
+        qg.group_id;
+END $$
+
+DELIMITER ;
+
 
 
 -- INDEXES
@@ -4121,6 +4480,7 @@ VALUES
 (4,2),
 (4,3),
 (4,4),
+(4,8),
 (4,9),
 (4,10),
 (4,15),
@@ -4147,7 +4507,7 @@ INSERT INTO tbl_program (name, description) VALUES
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
 ("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 1),
-("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 6),
+("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 5),
 ("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
@@ -4160,33 +4520,6 @@ INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
 (3, 'Secretary', 'Administrative lead'),
 (4, 'Treasurer', 'Financial manager'),
 (5, 'Officer', 'General executive member');
-
--- INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
--- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
--- ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
-
--- -- Insert events first
--- INSERT INTO tbl_event (
---   event_id,
---   organization_id,
---   user_id,
---   title,
---   description,
---   venue_type,
---   venue,
---   start_date,
---   end_date,
---   start_time,
---   end_time,
---   status,
---   type,
---   is_open_to,
---   fee,
---   capacity,
---   created_at,
---   certificate
--- ) VALUES
--- (1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
 
 
 INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
@@ -4279,54 +4612,38 @@ VALUES
 ('What did you like least about the activity?', 'textbox', 6, TRUE),
 ('Any other comments/suggestions for further improvement the activity?', 'textbox', 6, TRUE);
 
+INSERT INTO tbl_application_requirement(
+requirement_name, 
+is_applicable_to, 
+file_path, 
+created_by, 
+created_at, 
+updated_at
+) 
+VALUES
+('Letter of Intent', 'new', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
+('Student Org Application Form', 'new', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
+('By Laws of the Organization', 'new', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
+('List of Officers/Founders', 'new', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
+('Letter from the College Dean', 'new', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
+('List of Members', 'new', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
+('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
+('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
+('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
 
--- -- Link questions to our test event
--- INSERT INTO tbl_event_evaluation_config (event_id, group_id) VALUES
--- (1001, 1),
--- (1001, 2),
--- (1001, 3);
+INSERT INTO tbl_event_application_requirement (
+    requirement_name,
+    is_applicable_to,
+    file_path,
+    created_by,
+    created_at,
+    updated_at
+) VALUES
+('Event Proposal Form', 'pre-event', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
+('Program Flow', 'pre-event', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
+('Budget Proposal', 'pre-event', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
+('Attendance Sheet', 'post-event', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
+('Event Photos', 'post-event', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
+('Narrative Report', 'post-event', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
+('Financial Report', 'post-event', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30');
 
--- -- Evaluation for Attendee 3 (Registered)
--- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
--- (1001, '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU', '2023-11-17 18:30:00', 240);
-
--- -- Responses for Attendee 3
--- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
--- (1, 1, '3'), -- Relevant topics
--- (1, 2, '4'), -- Speaker quality
--- (1, 3, 'More hands-on workshops'), -- Future topics
--- (1, 4, '3'), -- Venue facilities
--- (1, 5, '2'), -- Seating comfort
--- (1, 6, '4'), -- Overall satisfaction
--- (1, 7, '4'), -- Would recommend
--- (1, 8, 'Great event overall!'); -- Comments
-
--- -- Evaluation for Attendee 6 (Registered - free event)
--- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
--- (1001, '900f929ec408cb4', '2023-11-17 19:15:00', 180);
-
--- -- Responses for Attendee 6
--- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
--- (2, 1, '4'),
--- (2, 2, '3'),
--- (2, 3, 'More case studies'),
--- (2, 4, '4'),
--- (2, 5, '3'),
--- (2, 6, '3'),
--- (2, 7, '3'),
--- (2, 8, 'Good content but too crowded');
-
--- -- Evaluation for Attendee 7 (Attended)
--- INSERT INTO tbl_evaluation (event_id, user_id, submitted_at, duration_seconds) VALUES
--- (1001, '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2023-11-17 17:45:00', 300);
-
--- -- Responses for Attendee 7
--- INSERT INTO tbl_evaluation_response (evaluation_id, question_id, response_value) VALUES
--- (3, 1, '4'),
--- (3, 2, '4'),
--- (3, 3, 'More technical deep dives'),
--- (3, 4, '2'),
--- (3, 5, '1'),
--- (3, 6, '3'),
--- (3, 7, '3'),
--- (3, 8, 'Seating was very uncomfortable');
