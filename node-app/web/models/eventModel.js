@@ -260,6 +260,113 @@ async function getOrganizationMembership(user_id) {
   }
 }
 
+async function approveEventApplication(approval_id, comment, event_application_id, user_id) {
+  const connection = await pool.getConnection();
+  try {
+    const [result] = await connection.query(
+      'CALL ApproveEventApplication(?, ?, ?, ?);',
+      [approval_id, comment, event_application_id, user_id]
+    );
+    return result;
+  } finally {
+    connection.release();
+  }
+}
+
+async function rejectEventApplication(approval_id, event_application_id, comment, user_id) {
+  const connection = await pool.getConnection();
+  try {
+    const [result] = await connection.query(
+      'CALL RejectEventApplication(?, ?, ?, ?);',
+      [approval_id, event_application_id, comment, user_id]
+    );
+    return result;
+  } finally {
+    connection.release();
+  }
+}
+
+async function getEventEvaluationConfig(event_id) {
+  const connection = await pool.getConnection();
+  try {
+    const [results] = await connection.query('CALL GetEventEvaluationConfig(?);', [event_id]);
+    // MySQL returns multiple result sets for each SELECT in the procedure
+    return {
+      settings: results[0][0] || null,
+      enabledGroups: results[1] || [],
+      allGroups: results[2] || []
+    };
+  } finally {
+    connection.release();
+  }
+}
+
+async function updateEventEvaluationConfig(event_id, group_ids, evaluation_end_date, evaluation_end_time, user_id) {
+  const connection = await pool.getConnection();
+  try {
+    const [result] = await connection.query(
+      'CALL UpdateEventEvaluationConfig(?, ?, ?, ?, ?);',
+      [
+        event_id,
+        JSON.stringify(group_ids),
+        evaluation_end_date,
+        evaluation_end_time,
+        user_id
+      ]
+    );
+    return result;
+  } finally {
+    connection.release();
+  }
+}
+
+async function uploadOrUpdatePostEventRequirement({
+  event_id,
+  event_application_id,
+  requirement_id,
+  cycle_number,
+  organization_id,
+  file_path,
+  submitted_by
+}) {
+  const connection = await pool.getConnection();
+  try {
+    const [result] = await connection.query(
+      'CALL UploadOrUpdatePostEventRequirement(?, ?, ?, ?, ?, ?, ?);',
+      [
+        event_id,
+        event_application_id,
+        requirement_id,
+        cycle_number,
+        organization_id,
+        file_path,
+        submitted_by
+      ]
+    );
+    return result;
+  } finally {
+    connection.release();
+  }
+}
+
+async function getEventRequirementSubmissions({
+  event_id,
+  event_application_id = null,
+  requirement_id = null,
+  submitted_by = null
+}) {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query(
+      'CALL GetEventRequirementSubmissions(?, ?, ?, ?);',
+      [event_id, event_application_id, requirement_id, submitted_by]
+    );
+    return rows[0];
+  } finally {
+    connection.release();
+  }
+}
+
 module.exports = {
     addEvent,
     getEventRequirements,
@@ -281,4 +388,10 @@ module.exports = {
     getEventApplicationIdByProposedEventId,
     createEventApplication,
     getOrganizationMembership,
+    approveEventApplication,
+    rejectEventApplication,
+    getEventEvaluationConfig,
+    updateEventEvaluationConfig,
+    uploadOrUpdatePostEventRequirement,
+    getEventRequirementSubmissions,
 };

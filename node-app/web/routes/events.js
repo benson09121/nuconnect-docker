@@ -3,23 +3,25 @@ const router = express.Router();
 const eventController = require('../controllers/eventController');
 const middleware = require('../../middlewares/middleWare');
 
+router.post('/event-applications', middleware.validateAzureJWT, middleware.hasPermission("CREATE_EVENT"),eventController.createEventApplication);
+router.get('/event-applications/:id/details', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventApplicationDetails);
+router.get('/event-applications/requirement', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventApplicationRequirement);
+router.put('/event-applications/:event_application_id/approve/:approval_id', middleware.validateAzureJWT,
+middleware.hasPermission("MANAGE_APPLICATIONS"), eventController.approveEventApplication);
+router.put('/event-applications/:event_application_id/reject/:approval_id', middleware.validateAzureJWT,middleware.hasPermission("MANAGE_APPLICATIONS"), eventController.rejectEventApplication);
 router.post(
-  '/event-applications',
+  '/event-applications/post-event-requirement',
   (req, res, next) => {
-    console.log('Body:', req.body);
-    console.log('Files:', req.files);
+    console.log('Incoming post-event requirement request:', {
+      body: req.body,
+      files: req.files,
+      file: req.file
+    });
     next();
   },
   middleware.validateAzureJWT,
-  middleware.hasPermission("CREATE_EVENT"),
-  eventController.createEventApplication
-);
-router.get('/event-applications/:id/details', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventApplicationDetails);
-router.get(
-  '/event-applications/requirement',
-  middleware.validateAzureJWT,
-  middleware.hasPermission("VIEW_EVENT"),
-  eventController.getEventApplicationRequirement
+  middleware.hasPermission("SUBMIT_REQUIREMENTS"),
+  eventController.uploadOrUpdatePostEventRequirement
 );
 
 router.post('/events', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_EVENTS"), eventController.addEvent);
@@ -33,6 +35,20 @@ router.post('/event-requirements/save', middleware.validateAzureJWT, middleware.
 router.get('/events/:id', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventById);
 router.get('/events/:id/attendees', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getAttendeesbyEventId);
 router.get('/events/:id/stats', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventStats);
+
+router.get(
+  '/events/:id/evaluation-config',
+  middleware.validateAzureJWT,
+  middleware.hasPermission("VIEW_EVALUATION"),
+  eventController.getEventEvaluationConfig
+);
+router.put(
+  '/events/:id/evaluation-config',
+  middleware.validateAzureJWT,
+  middleware.hasPermission("UPDATE_EVALUATION"),
+  eventController.updateEventEvaluationConfig
+);
+
 router.get('/events/:id/evaluation-responses/grouped', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventEvaluationResponsesByGroup);
 router.get('/events/status/:status', middleware.validateAzureJWT, middleware.hasPermission("VIEW_EVENT"), eventController.getEventsByStatus);
 router.put('/events/:id', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_EVENTS"), eventController.updateEvent);
