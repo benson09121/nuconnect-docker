@@ -1,4 +1,6 @@
 const eventModel = require('../models/eventModel');
+const fs = require('fs');
+const path = require('path');
 
 async function addEvent(req, res) {
     try {
@@ -27,6 +29,7 @@ async function saveEventRequirements(req, res) {
   try {
     let { user_id, user_email, requirements } = req.body;
 
+    // If user_id is not provided but user_email is, look up user_id
     if (!user_id && user_email) {
       const user = await eventModel.getUserByEmail(user_email);
       if (!user) {
@@ -258,6 +261,343 @@ async function getEventEvaluationResponsesByGroup(req, res) {
   }
 }
 
+async function getEventApplicationDetails(req, res) {
+  try {
+    const proposed_event_id = req.params.id;
+    // Lookup event_application_id from proposed_event_id
+    const event_application_id = await eventModel.getEventApplicationIdByProposedEventId(proposed_event_id);
+    if (!event_application_id) {
+      return res.status(404).json({ message: 'No event application found for this proposed event.' });
+    }
+    // Use the existing method
+    const details = await eventModel.getEventApplicationDetails(event_application_id);
+    if (!details.application) {
+      return res.status(404).json({ message: 'Event application not found' });
+    }
+    res.status(200).json(details);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while fetching event application details.",
+    });
+  }
+}
+
+async function createEventApplication(req, res) {
+  try {
+    // Parse event and requirements from the request
+    const event = JSON.parse(req.body.event);
+    const requirements = JSON.parse(req.body.requirements);
+
+    // Lookup user_id from email if not present
+    let applicant_user_id = req.user?.user_id;
+    if (!applicant_user_id && req.body.user_email) {
+      const user = await eventModel.getUserByEmail(req.body.user_email);
+      if (!user) {
+        return res.status(404).json({ message: "User not found for the provided email." });
+      }
+      applicant_user_id = user.user_id;
+    }
+
+    // Lookup organization_id from tbl_organization_members if not provided
+    let organization_id = event.organization_id;
+    let cycle_number = event.cycle_number;
+    if ((!organization_id || !cycle_number) && applicant_user_id) {
+      const orgMember = await eventModel.getOrganizationMembership(applicant_user_id);
+      if (orgMember) {
+        organization_id = orgMember.organization_id;
+        cycle_number = orgMember.cycle_number;
+      }
+    }
+
+    // If still no organization_id, set to 1 as default
+    if (!organization_id) {
+      organization_id = 1;
+    }
+    // If still no cycle_number, set to 1 as default
+    if (!cycle_number) {
+      cycle_number = 1;
+    }
+
+    // Handle file uploads for requirements
+    const requirementFiles = {};
+    requirements.forEach(reqItem => {
+      const fileKey = `requirement_${reqItem.requirement_id}`;
+      if (req.files && req.files[fileKey]) {
+        requirementFiles[reqItem.requirement_id] = req.files[fileKey];
+      }
+    });
+
+    // Generate filenames for requirements and use them for both DB and file upload
+    const requirementFilePaths = requirements.map(reqItem => {
+      const file = requirementFiles[reqItem.requirement_id];
+      if (file) {
+        const filename = `requirement-${Date.now()}-${file.name}`;
+        return {
+          requirement_id: reqItem.requirement_id,
+          file_path: filename
+        };
+      } else {
+        return {
+          requirement_id: reqItem.requirement_id,
+          file_path: reqItem.file_path || null
+        };
+      }
+    });
+
+    // Call the stored procedure
+    const dbResult = await eventModel.createEventApplication(
+      organization_id,
+      cycle_number,
+      applicant_user_id,
+      event,
+      requirementFilePaths
+    );
+
+    // Save files to disk
+    const orgDir = path.join('/app/organizations', String(organization_id), 'events', String(dbResult[0].event_id));
+    if (!fs.existsSync(orgDir)) {
+      fs.mkdirSync(orgDir, { recursive: true });
+    }
+    const requirementsDir = path.join(orgDir, 'requirements');
+    if (!fs.existsSync(requirementsDir)) {
+      fs.mkdirSync(requirementsDir, { recursive: true });
+    }
+
+    requirements.forEach(reqItem => {
+      const file = requirementFiles[reqItem.requirement_id];
+      if (file) {
+        const filename = requirementFilePaths.find(r => r.requirement_id === reqItem.requirement_id)?.file_path;
+        fs.writeFileSync(
+          path.join(requirementsDir, filename),
+          file.data
+        );
+      }
+    });
+
+    res.status(201).json({
+      message: 'Event application submitted successfully',
+      data: dbResult[0]
+    });
+  } catch (error) {
+    console.error("CreateEventApplication error:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+async function getEventApplicationRequirement(req, res) {
+    const requirement_name = req.query.requirement_name;
+    let org_id = req.query.organization_id;
+    let event_id = req.query.event_id;
+
+    // Encode organization_id and event_id for path safety (if needed)
+    org_id = encodeURIComponent(org_id);
+    event_id = encodeURIComponent(event_id);
+
+    try {
+        res.header('Access-Control-Allow-Origin', 'http://localhost:5173');
+        // Example path: /protected-event-requirements/{org_id}/events/{event_id}/requirements/{requirement_name}
+        res.setHeader(
+            'X-Accel-Redirect',
+            `/protected-event-requirements/${org_id}/events/${event_id}/requirements/${requirement_name}`
+        );
+        const match = requirement_name.match(/requirement-(\d+)-(.+)/);
+        const downloadName = match ? match[0] : requirement_name;
+        res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+        res.end();
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the event requirement.",
+        });
+    }
+}
+
+async function approveEventApplication(req, res) {
+  try {
+    const { approval_id, event_application_id } = req.params;
+    const { comment, user_email, user_id } = req.body;
+
+    // Lookup user_id from email if not provided
+    let approver_id = user_id;
+    if (!approver_id && user_email) {
+      const user = await eventModel.getUserByEmail(user_email);
+      if (!user) {
+        return res.status(404).json({ message: "Approver not found for the provided email." });
+      }
+      approver_id = user.user_id;
+    }
+    if (!approver_id) {
+      return res.status(400).json({ message: "Approver user_id or user_email is required." });
+    }
+
+    await eventModel.approveEventApplication(
+      approval_id,
+      comment || null,
+      event_application_id,
+      approver_id
+    );
+    res.status(200).json({ message: "Event application approved successfully." });
+  } catch (error) {
+    console.error("approveEventApplication error:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+async function rejectEventApplication(req, res) {
+  try {
+    const { approval_id, event_application_id } = req.params;
+    const { comment, user_email, user_id } = req.body;
+
+    // Lookup user_id from email if not provided
+    let approver_id = user_id;
+    if (!approver_id && user_email) {
+      const user = await eventModel.getUserByEmail(user_email);
+      if (!user) {
+        return res.status(404).json({ message: "Approver not found for the provided email." });
+      }
+      approver_id = user.user_id;
+    }
+    if (!approver_id) {
+      return res.status(400).json({ message: "Approver user_id or user_email is required." });
+    }
+
+    await eventModel.rejectEventApplication(
+      approval_id,
+      event_application_id,
+      comment || null,
+      approver_id
+    );
+    res.status(200).json({ message: "Event application rejected successfully." });
+  } catch (error) {
+    console.error("rejectEventApplication error:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+async function getEventEvaluationConfig(req, res) {
+  try {
+    const event_id = req.params.id;
+    const config = await eventModel.getEventEvaluationConfig(event_id);
+    if (!config.settings) {
+      return res.status(404).json({ message: 'No evaluation config found for this event.' });
+    }
+    res.status(200).json(config);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while fetching event evaluation config.",
+    });
+  }
+}
+
+async function updateEventEvaluationConfig(req, res) {
+  try {
+    const event_id = req.params.id;
+    let { group_ids, evaluation_end_date, evaluation_end_time, user_id, user_email } = req.body;
+
+    // Lookup user_id from email if not provided
+    if (!user_id && user_email) {
+      const user = await eventModel.getUserByEmail(user_email);
+      if (!user) {
+        return res.status(404).json({ message: "User not found for the provided email." });
+      }
+      user_id = user.user_id;
+    }
+
+    if (!user_id || !Array.isArray(group_ids)) {
+      return res.status(400).json({ message: "user_id (or user_email) and group_ids array are required." });
+    }
+
+    await eventModel.updateEventEvaluationConfig(
+      event_id,
+      group_ids,
+      evaluation_end_date || null,
+      evaluation_end_time || null,
+      user_id
+    );
+    res.status(200).json({ message: "Event evaluation config updated successfully." });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while updating event evaluation config.",
+    });
+  }
+}
+
+async function uploadOrUpdatePostEventRequirement(req, res) {
+  try {
+    // Parse numeric values from strings
+    const event_id = parseInt(req.body.event_id);
+    const requirement_id = parseInt(req.body.requirement_id);
+    const cycle_number = parseInt(req.body.cycle_number);
+    const organization_id = parseInt(req.body.organization_id);
+    const submitted_by_email = req.body.submitted_by_email;
+    
+    // Handle null/empty string conversion for event_application_id
+    const event_application_id = req.body.event_application_id === "" ? 
+      null : parseInt(req.body.event_application_id);
+
+    let submitted_by = req.body.submitted_by;
+    if (!submitted_by && submitted_by_email) {
+      const user = await eventModel.getUserByEmail(submitted_by_email);
+      if (!user) {
+        return res.status(404).json({ message: "User not found for the provided email." });
+      }
+      submitted_by = user.user_id;
+    }
+
+    const file_path = req.body.file_path;
+
+    // Validate required fields
+    if (!event_id || !requirement_id || !cycle_number || !organization_id || !file_path || !submitted_by_email) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
+
+    // File upload logic
+    let savedFilePath = file_path;
+    if (req.file) {
+      // Create directory structure
+      const requirementsDir = path.join(
+        '/app/organizations',
+        String(organization_id),
+        'events',
+        String(event_id),
+        'requirements'
+      );
+      
+      if (!fs.existsSync(requirementsDir)) {
+        fs.mkdirSync(requirementsDir, { recursive: true });
+      }
+      
+      // Generate unique filename
+      const filename = `requirement-${Date.now()}-${req.file.originalname}`;
+      savedFilePath = filename;
+      
+      // Save file
+      fs.writeFileSync(
+        path.join(requirementsDir, filename),
+        req.file.buffer || req.file.data
+      );
+    }
+
+    // Call model with proper parameters
+    await eventModel.uploadOrUpdatePostEventRequirement({
+      event_id,
+      event_application_id,
+      requirement_id,
+      cycle_number,
+      organization_id,
+      file_path: savedFilePath,
+      submitted_by 
+    });
+
+    res.status(200).json({ 
+      message: "Post-event requirement uploaded/updated successfully.",
+      file_path: savedFilePath 
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while uploading/updating the post-event requirement.",
+    });
+  }
+}
 
 module.exports = {
     addEvent,
@@ -274,5 +614,13 @@ module.exports = {
     rejectPaidEventRegistration,
     getEventStats,
     getAllEvaluationQuestions,
-    getEventEvaluationResponsesByGroup
+    getEventEvaluationResponsesByGroup,
+    getEventApplicationDetails,
+    createEventApplication,
+    getEventApplicationRequirement,
+    approveEventApplication,
+    rejectEventApplication,
+    getEventEvaluationConfig,
+    updateEventEvaluationConfig,
+    uploadOrUpdatePostEventRequirement
 };
