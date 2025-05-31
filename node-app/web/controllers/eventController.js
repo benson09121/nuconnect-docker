@@ -411,6 +411,194 @@ async function getEventApplicationRequirement(req, res) {
     }
 }
 
+async function approveEventApplication(req, res) {
+  try {
+    const { approval_id, event_application_id } = req.params;
+    const { comment, user_email, user_id } = req.body;
+
+    // Lookup user_id from email if not provided
+    let approver_id = user_id;
+    if (!approver_id && user_email) {
+      const user = await eventModel.getUserByEmail(user_email);
+      if (!user) {
+        return res.status(404).json({ message: "Approver not found for the provided email." });
+      }
+      approver_id = user.user_id;
+    }
+    if (!approver_id) {
+      return res.status(400).json({ message: "Approver user_id or user_email is required." });
+    }
+
+    await eventModel.approveEventApplication(
+      approval_id,
+      comment || null,
+      event_application_id,
+      approver_id
+    );
+    res.status(200).json({ message: "Event application approved successfully." });
+  } catch (error) {
+    console.error("approveEventApplication error:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+async function rejectEventApplication(req, res) {
+  try {
+    const { approval_id, event_application_id } = req.params;
+    const { comment, user_email, user_id } = req.body;
+
+    // Lookup user_id from email if not provided
+    let approver_id = user_id;
+    if (!approver_id && user_email) {
+      const user = await eventModel.getUserByEmail(user_email);
+      if (!user) {
+        return res.status(404).json({ message: "Approver not found for the provided email." });
+      }
+      approver_id = user.user_id;
+    }
+    if (!approver_id) {
+      return res.status(400).json({ message: "Approver user_id or user_email is required." });
+    }
+
+    await eventModel.rejectEventApplication(
+      approval_id,
+      event_application_id,
+      comment || null,
+      approver_id
+    );
+    res.status(200).json({ message: "Event application rejected successfully." });
+  } catch (error) {
+    console.error("rejectEventApplication error:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+async function getEventEvaluationConfig(req, res) {
+  try {
+    const event_id = req.params.id;
+    const config = await eventModel.getEventEvaluationConfig(event_id);
+    if (!config.settings) {
+      return res.status(404).json({ message: 'No evaluation config found for this event.' });
+    }
+    res.status(200).json(config);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while fetching event evaluation config.",
+    });
+  }
+}
+
+async function updateEventEvaluationConfig(req, res) {
+  try {
+    const event_id = req.params.id;
+    let { group_ids, evaluation_end_date, evaluation_end_time, user_id, user_email } = req.body;
+
+    // Lookup user_id from email if not provided
+    if (!user_id && user_email) {
+      const user = await eventModel.getUserByEmail(user_email);
+      if (!user) {
+        return res.status(404).json({ message: "User not found for the provided email." });
+      }
+      user_id = user.user_id;
+    }
+
+    if (!user_id || !Array.isArray(group_ids)) {
+      return res.status(400).json({ message: "user_id (or user_email) and group_ids array are required." });
+    }
+
+    await eventModel.updateEventEvaluationConfig(
+      event_id,
+      group_ids,
+      evaluation_end_date || null,
+      evaluation_end_time || null,
+      user_id
+    );
+    res.status(200).json({ message: "Event evaluation config updated successfully." });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while updating event evaluation config.",
+    });
+  }
+}
+
+async function uploadOrUpdatePostEventRequirement(req, res) {
+  try {
+    // Parse numeric values from strings
+    const event_id = parseInt(req.body.event_id);
+    const requirement_id = parseInt(req.body.requirement_id);
+    const cycle_number = parseInt(req.body.cycle_number);
+    const organization_id = parseInt(req.body.organization_id);
+    const submitted_by_email = req.body.submitted_by_email;
+    
+    // Handle null/empty string conversion for event_application_id
+    const event_application_id = req.body.event_application_id === "" ? 
+      null : parseInt(req.body.event_application_id);
+
+    let submitted_by = req.body.submitted_by;
+    if (!submitted_by && submitted_by_email) {
+      const user = await eventModel.getUserByEmail(submitted_by_email);
+      if (!user) {
+        return res.status(404).json({ message: "User not found for the provided email." });
+      }
+      submitted_by = user.user_id;
+    }
+
+    const file_path = req.body.file_path;
+
+    // Validate required fields
+    if (!event_id || !requirement_id || !cycle_number || !organization_id || !file_path || !submitted_by_email) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
+
+    // File upload logic
+    let savedFilePath = file_path;
+    if (req.file) {
+      // Create directory structure
+      const requirementsDir = path.join(
+        '/app/organizations',
+        String(organization_id),
+        'events',
+        String(event_id),
+        'requirements'
+      );
+      
+      if (!fs.existsSync(requirementsDir)) {
+        fs.mkdirSync(requirementsDir, { recursive: true });
+      }
+      
+      // Generate unique filename
+      const filename = `requirement-${Date.now()}-${req.file.originalname}`;
+      savedFilePath = filename;
+      
+      // Save file
+      fs.writeFileSync(
+        path.join(requirementsDir, filename),
+        req.file.buffer || req.file.data
+      );
+    }
+
+    // Call model with proper parameters
+    await eventModel.uploadOrUpdatePostEventRequirement({
+      event_id,
+      event_application_id,
+      requirement_id,
+      cycle_number,
+      organization_id,
+      file_path: savedFilePath,
+      submitted_by 
+    });
+
+    res.status(200).json({ 
+      message: "Post-event requirement uploaded/updated successfully.",
+      file_path: savedFilePath 
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "An error occurred while uploading/updating the post-event requirement.",
+    });
+  }
+}
+
 module.exports = {
     addEvent,
     getEventRequirements,
@@ -430,4 +618,9 @@ module.exports = {
     getEventApplicationDetails,
     createEventApplication,
     getEventApplicationRequirement,
+    approveEventApplication,
+    rejectEventApplication,
+    getEventEvaluationConfig,
+    updateEventEvaluationConfig,
+    uploadOrUpdatePostEventRequirement
 };
