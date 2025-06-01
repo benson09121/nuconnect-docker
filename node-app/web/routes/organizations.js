@@ -76,16 +76,66 @@ router.post(
 );
 
 router.get(
-    '/committee-members',
+    '/all-committee-members',
     middleware.validateAzureJWT,
     middleware.hasPermission("VIEW_COMMITTEE"),
-    organizationsController.getCommitteeMembers
+    organizationsController.getAllCommitteeMembers
 );
 router.post(
     '/add-committee-member',
     middleware.validateAzureJWT,
     middleware.hasPermission("CREATE_COMMITTEE"),
     organizationsController.addCommitteeMember
+);
+router.put(
+    '/update-committee-member',
+    middleware.validateAzureJWT,
+    middleware.hasPermission("UPDATE_COMMITTEE"),
+    organizationsController.updateCommitteeMember
+);
+router.post(
+    '/archive-committee-member',
+    middleware.validateAzureJWT,
+    middleware.hasPermission("DELETE_COMMITTEE"),
+    organizationsController.archiveCommitteeMember
+);
+
+router.get(
+    '/pending-organization-members',
+    middleware.validateAzureJWT,
+    middleware.hasPermission("VIEW_ORGANIZATION"),
+    organizationsController.getPendingOrganizationMembers
+);
+router.post(
+    '/approve-membership-application',
+    middleware.validateAzureJWT,
+    middleware.hasPermission("MANAGE_APPLICATIONS"),
+    organizationsController.approveMembershipApplication
+);
+router.post(
+    '/reject-membership-application',
+    middleware.validateAzureJWT,
+    middleware.hasPermission("MANAGE_APPLICATIONS"),
+    organizationsController.rejectMembershipApplication
+);
+
+router.post(
+    '/add-organization-member',
+    middleware.validateAzureJWT,
+    middleware.hasPermission("CREATE_COMMITTEE"),
+    organizationsController.addOrganizationMember
+);
+router.put(
+    '/edit-organization-member',
+    middleware.validateAzureJWT,
+    middleware.hasPermission("UPDATE_COMMITTEE"),
+    organizationsController.editOrganizationMember
+);
+router.post(
+    '/archive-organization-member',
+    middleware.validateAzureJWT,
+    middleware.hasPermission("DELETE_COMMITTEE"),
+    organizationsController.archiveOrganizationMember
 );
 
 module.exports = router
