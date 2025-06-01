@@ -449,21 +449,14 @@ async function archiveCommittee({
     }
 }
 
-async function getCommitteeMembers(committee_id) {
+async function getAllCommitteeMembers() {
     const connection = await pool.getConnection();
     try {
-        console.log('[getCommitteeMembers] SQL CALL: CALL GetCommitteeMembers(?)', [committee_id]);
-        const [results] = await connection.query(
-            'CALL GetCommitteeMembers(?)',
-            [committee_id]
-        );
-        // MySQL returns multiple result sets: [committeeInfo, members]
-        return {
-            committee: results[0]?.[0] || null,
-            members: results[1] || []
-        };
+        console.log('[getAllCommitteeMembers] SQL CALL: CALL GetAllCommitteeMembers()');
+        const [rows] = await connection.query('CALL GetAllCommitteeMembers()');
+        return rows[0];
     } catch (error) {
-        console.error('[getCommitteeMembers] SQL/Error:', error.sqlMessage || error.message, error);
+        console.error('[getAllCommitteeMembers] SQL/Error:', error.sqlMessage || error.message, error);
         throw error;
     } finally {
         connection.release();
@@ -501,6 +494,159 @@ async function addCommitteeMember({
         connection.release();
     }
 }
+
+async function updateCommitteeMember({
+    committee_member_id,
+    new_role,
+    action_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            `CALL UpdateCommitteeMember(?, ?, ?)`,
+            [committee_member_id, new_role, action_by_email]
+        );
+        return rows[0][0]; // { rows_affected: ... }
+    } catch (error) {
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function archiveCommitteeMember({
+    committee_member_id,
+    reason,
+    action_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            `CALL ArchiveCommitteeMember(?, ?, ?)`,
+            [committee_member_id, reason, action_by_email]
+        );
+        return rows[0][0]; // { rows_archived: ... }
+    } catch (error) {
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function getPendingOrganizationMembers(organization_id, cycle_number) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'CALL GetPendingOrganizationMembers(?, ?);',
+            [organization_id, cycle_number]
+        );
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching pending organization members:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+async function approveMembershipApplication(application_id, reviewer_email, remarks) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'CALL ApproveMembershipApplication(?, ?, ?);',
+            [application_id, reviewer_email, remarks]
+        );
+        return rows[0];
+    } catch (error) {
+        console.error('Error approving membership application:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function rejectMembershipApplication(application_id, reviewer_email, remarks) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'CALL RejectMembershipApplication(?, ?, ?);',
+            [application_id, reviewer_email, remarks]
+        );
+        return rows[0];
+    } catch (error) {
+        console.error('Error rejecting membership application:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function addOrganizationMember({
+    organization_id,
+    cycle_number,
+    email,
+    status,
+    executive_role_id = null,
+    action_by_email,
+    program_name = null
+}) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'CALL AddOrganizationMember(?, ?, ?, ?, ?, ?, ?);',
+            [
+                organization_id,
+                cycle_number,
+                email,
+                status,
+                executive_role_id,
+                action_by_email,
+                program_name
+            ]
+        );
+        return rows[0];
+    } catch (error) {
+        console.error('Error adding organization member:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function editOrganizationMember({
+    current_email,
+    new_email,
+    new_program_name
+}) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'CALL EditOrganizationMember(?, ?, ?);',
+            [current_email, new_email, new_program_name]
+        );
+        return rows[0];
+    } catch (error) {
+        console.error('Error editing organization member:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function archiveOrganizationMember({ member_id, archived_by_email }) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'CALL ArchiveOrganizationMember(?, ?);',
+            [member_id, archived_by_email]
+        );
+        return rows[0];
+    } catch (error) {
+        console.error('Error archiving organization member:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
       
 module.exports = {
     getOrganizations,
@@ -527,7 +673,15 @@ module.exports = {
     createCommittee,
     updateCommittee,
     archiveCommittee,
-    getCommitteeMembers,
+    getAllCommitteeMembers,
     addCommitteeMember,
+    updateCommitteeMember,
+    archiveCommitteeMember,
+    getPendingOrganizationMembers,
+    approveMembershipApplication,
+    rejectMembershipApplication,
+    addOrganizationMember,
+    editOrganizationMember,
+    archiveOrganizationMember,
 
 };

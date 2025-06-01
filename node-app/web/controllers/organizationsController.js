@@ -580,18 +580,14 @@ async function archiveCommittee(req, res) {
     }
 }
 
-async function getCommitteeMembers(req, res) {
+async function getAllCommitteeMembers(req, res) {
     try {
-        const { committee_id } = req.query;
-        if (!committee_id) {
-            return res.status(400).json({ error: "committee_id is required." });
-        }
-        const result = await organizationsModel.getCommitteeMembers(committee_id);
-        res.json(result);
+        const members = await organizationsModel.getAllCommitteeMembers();
+        res.json(members);
     } catch (error) {
-        console.error('[GetCommitteeMembers] SQL/Error:', error.sqlMessage || error.message, error);
+        console.error('[GetAllCommitteeMembers] SQL/Error:', error.sqlMessage || error.message, error);
         res.status(400).json({
-            error: error.sqlMessage || error.message || "An error occurred while fetching committee members."
+            error: error.sqlMessage || error.message || "An error occurred while fetching all committee members."
         });
     }
 }
@@ -629,6 +625,160 @@ async function addCommitteeMember(req, res) {
     }
 }
 
+async function updateCommitteeMember(req, res) {
+    try {
+        const { committee_member_id, new_role } = req.body;
+        const action_by_email = req.user.email;
+        const result = await organizationsModel.updateCommitteeMember({
+            committee_member_id,
+            new_role,
+            action_by_email
+        });
+        res.status(200).json({
+            message: 'Committee member updated successfully.',
+            rows_affected: result.rows_affected
+        });
+    } catch (error) {
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while updating committee member.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
+
+async function archiveCommitteeMember(req, res) {
+    try {
+        const { committee_member_id, reason } = req.body;
+        const action_by_email = req.user.email;
+        const result = await organizationsModel.archiveCommitteeMember({
+            committee_member_id,
+            reason,
+            action_by_email
+        });
+        res.status(200).json({
+            message: 'Committee member archived successfully.',
+            rows_archived: result.rows_archived
+        });
+    } catch (error) {
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while archiving committee member.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
+
+async function getPendingOrganizationMembers(req, res) {
+    try {
+        const { organization_id, cycle_number } = req.query;
+        if (!organization_id || !cycle_number) {
+            return res.status(400).json({ error: "organization_id and cycle_number are required." });
+        }
+        const members = await organizationsModel.getPendingOrganizationMembers(organization_id, cycle_number);
+        res.json(members);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching pending organization members.",
+        });
+    }
+}
+async function approveMembershipApplication(req, res) {
+    try {
+        const { application_id, remarks } = req.body;
+        const reviewer_email = req.user.email;
+        if (!application_id) {
+            return res.status(400).json({ error: "application_id is required." });
+        }
+        await organizationsModel.approveMembershipApplication(application_id, reviewer_email, remarks || null);
+        res.json({ message: 'Membership application approved successfully.' });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while approving the membership application.",
+        });
+    }
+}
+
+async function rejectMembershipApplication(req, res) {
+    try {
+        const { application_id, remarks } = req.body;
+        const reviewer_email = req.user.email;
+        if (!application_id) {
+            return res.status(400).json({ error: "application_id is required." });
+        }
+        await organizationsModel.rejectMembershipApplication(application_id, reviewer_email, remarks || null);
+        res.json({ message: 'Membership application rejected successfully.' });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while rejecting the membership application.",
+        });
+    }
+}
+
+async function addOrganizationMember(req, res) {
+    try {
+        const {
+            organization_id,
+            cycle_number,
+            email,
+            status,
+            executive_role_id,
+            program_name
+        } = req.body;
+        const action_by_email = req.user.email;
+
+        if (!organization_id || !cycle_number || !email || !status) {
+            return res.status(400).json({ error: "organization_id, cycle_number, email, and status are required." });
+        }
+
+        await organizationsModel.addOrganizationMember({
+            organization_id,
+            cycle_number,
+            email,
+            status,
+            executive_role_id,
+            action_by_email,
+            program_name
+        });
+
+        res.status(201).json({ message: 'Organization member added successfully.' });
+    } catch (error) {
+        res.status(400).json({
+            error: error.sqlMessage || error.message || "An error occurred while adding the organization member."
+        });
+    }
+}
+
+async function editOrganizationMember(req, res) {
+    try {
+        const { current_email, new_email, new_program_name } = req.body;
+        if (!current_email || !new_email) {
+            return res.status(400).json({ error: "current_email and new_email are required." });
+        }
+        await organizationsModel.editOrganizationMember({
+            current_email,
+            new_email,
+            new_program_name
+        });
+        res.status(200).json({ message: 'Organization member updated successfully.' });
+    } catch (error) {
+        res.status(400).json({
+            error: error.sqlMessage || error.message || "An error occurred while editing the organization member."
+        });
+    }
+}
+
+async function archiveOrganizationMember(req, res) {
+    try {
+        const { member_id } = req.body;
+        if (!member_id) {
+            return res.status(400).json({ error: "member_id is required." });
+        }
+        const archived_by_email = req.user.email;
+        await organizationsModel.archiveOrganizationMember({ member_id, archived_by_email });
+        res.status(200).json({ message: 'Organization member archived successfully.' });
+    } catch (error) {
+        res.status(400).json({
+            error: error.sqlMessage || error.message || "An error occurred while archiving the organization member."
+        });
+    }
+}
+
+
 module.exports = {
     getOrganizations,
     createOrganizationApplication,
@@ -654,6 +804,14 @@ module.exports = {
     getOrganizationCommittees,
     updateCommittee,
     archiveCommittee,
-    getCommitteeMembers,
-    addCommitteeMember
+    getAllCommitteeMembers,
+    addCommitteeMember,
+    updateCommitteeMember,
+    archiveCommitteeMember,
+    getPendingOrganizationMembers,
+    approveMembershipApplication,
+    rejectMembershipApplication,
+    addOrganizationMember,
+    editOrganizationMember,
+    archiveOrganizationMember,
 };
