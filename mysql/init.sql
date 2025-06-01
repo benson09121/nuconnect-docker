@@ -135,6 +135,7 @@ CREATE TABLE tbl_organization_members (
     cycle_number INT NOT NULL,
     user_id VARCHAR(200) NOT NULL,
     member_type ENUM('Member', 'Executive', 'Committee') DEFAULT 'Member',
+    status ENUM('Active', 'Pending', 'Archived') DEFAULT 'Active',
     executive_role_id INT DEFAULT NULL,
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number) ON DELETE CASCADE,
@@ -874,7 +875,6 @@ BEGIN
     ORDER BY e.start_date DESC, e.start_time DESC;
 END $$
 DELIMITER ;
-
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizations(IN p_user_id VARCHAR(200))
 BEGIN
@@ -885,13 +885,16 @@ BEGIN
         o.description AS organization_description,
         o.category AS organization_type,
         o.is_recruiting,
+        o.membership_fee_amount,
         (
-            -- Count only non-executive members and committee members (exclude executives)
+            -- Count only non-executive Active members
             SELECT COUNT(*) 
             FROM tbl_organization_members om
             WHERE om.organization_id = o.organization_id
               AND om.member_type != 'Executive'
+              AND om.status = 'Active'
         ) + (
+            -- Count committee members not already counted
             SELECT COUNT(DISTINCT cm.user_id)
             FROM tbl_committee c
             JOIN tbl_committee_members cm ON c.committee_id = cm.committee_id
@@ -900,6 +903,7 @@ BEGIN
                   SELECT user_id 
                   FROM tbl_organization_members 
                   WHERE organization_id = o.organization_id
+                    AND status = 'Active'
               )
         ) AS total_members,
         (
@@ -909,6 +913,7 @@ BEGIN
                 FROM tbl_organization_members om
                 JOIN tbl_user u ON om.user_id = u.user_id
                 WHERE om.organization_id = o.organization_id
+                  AND om.status = 'Active'
                 UNION
                 SELECT u.profile_picture
                 FROM tbl_committee_members cm
@@ -918,25 +923,24 @@ BEGIN
                 LIMIT 4
             ) AS u
         ) AS member_profile_pictures,
-        CASE 
-            WHEN EXISTS (
-                SELECT 1 
-                FROM tbl_organization_members om 
-                WHERE om.organization_id = o.organization_id 
-                AND om.user_id = p_user_id
-            ) THEN 1
-            WHEN EXISTS (
-                SELECT 1 
-                FROM tbl_committee c
-                JOIN tbl_committee_members cm ON c.committee_id = cm.committee_id
-                WHERE c.organization_id = o.organization_id
-                AND cm.user_id = p_user_id
-            ) THEN 1
-            ELSE 0
-        END AS has_joined,
+        -- Return membership status instead of has_joined
+        COALESCE(
+            (SELECT om.status 
+             FROM tbl_organization_members om 
+             WHERE om.organization_id = o.organization_id 
+               AND om.user_id = p_user_id
+             LIMIT 1),
+            (SELECT IF(COUNT(*) > 0, 'Active', NULL)
+             FROM tbl_committee c
+             JOIN tbl_committee_members cm ON c.committee_id = cm.committee_id
+             WHERE c.organization_id = o.organization_id
+               AND cm.user_id = p_user_id
+            ),
+            'Not Member'
+        ) AS membership_status,
         (
             SELECT JSON_ARRAYAGG(JSON_OBJECT(
-                  'event_id', e.event_id,
+                'event_id', e.event_id,
                 'event_start_date', e.start_date,
                 'event_end_date', e.end_date,
                 'event_title', e.title,
@@ -980,6 +984,7 @@ BEGIN
             JOIN tbl_user u ON om.user_id = u.user_id
             WHERE om.organization_id = o.organization_id
             AND om.member_type = 'Executive'
+            AND om.status = 'Active'
         ) AS officers
     FROM tbl_organization o
     ORDER BY o.category, o.name;
@@ -4429,6 +4434,146 @@ BEGIN
     ORDER BY 
         qg.group_id;
 END $$
+
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationFee(IN
+    p_organization_id INT
+)
+BEGIN
+    SELECT membership_fee_amount AS membership_fee FROM tbl_organization WHERE organization_id = p_organization_id;  
+END $$
+
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE ApplyForMembership(
+    IN p_org_id INT,
+    IN p_user_id VARCHAR(200),
+    IN p_payment_data JSON,
+    IN p_question_id INT,
+    IN p_response_value TEXT
+)
+BEGIN
+    DECLARE v_cycle_number INT;
+    DECLARE v_fee_type ENUM('Per Term', 'Whole Academic Year', 'Free');
+    DECLARE v_fee_amount DECIMAL(10,2);
+    DECLARE v_application_id INT;
+    DECLARE error_msg TEXT;
+    
+    -- Get current renewal cycle
+    SELECT MAX(cycle_number) INTO v_cycle_number
+    FROM tbl_renewal_cycle 
+    WHERE organization_id = p_org_id;
+    
+    IF v_cycle_number IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No active renewal cycle found for organization';
+    END IF;
+
+    -- Get organization fee details
+    SELECT membership_fee_type, membership_fee_amount
+    INTO v_fee_type, v_fee_amount
+    FROM tbl_organization
+    WHERE organization_id = p_org_id;
+
+    -- Validate payment requirements
+    IF v_fee_type != 'Free' AND v_fee_amount > 0 THEN
+        IF p_payment_data IS NULL THEN
+            SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Payment is required for this organization';
+        END IF;
+        
+        IF JSON_EXTRACT(p_payment_data, '$.membership_fee') != v_fee_amount THEN
+            -- Fixed CONCAT syntax
+            SET error_msg = CONCAT('Payment amount does not match organization fee. Required: ', v_fee_amount);
+            SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = error_msg;
+        END IF;
+    END IF;
+
+    -- Start transaction
+    START TRANSACTION;
+    
+    -- Create membership application
+    INSERT INTO tbl_membership_application (
+        organization_id, 
+        cycle_number, 
+        user_id, 
+        status
+    )
+    VALUES (
+        p_org_id,
+        v_cycle_number,
+        p_user_id,
+        'Pending'
+    );
+    
+    SET v_application_id = LAST_INSERT_ID();
+    
+    -- Store custom question response
+    INSERT INTO tbl_membership_response (
+        application_id,
+        question_id,
+        response_value
+    )
+    VALUES (
+        v_application_id,
+        p_question_id,
+        p_response_value
+    );
+    
+    -- Create organization member record
+    INSERT INTO tbl_organization_members (
+        organization_id,
+        cycle_number,
+        user_id,
+        member_type,
+        status
+    )
+    VALUES (
+        p_org_id,
+        v_cycle_number,
+        p_user_id,
+        'Member',
+        'Pending'
+    );
+    
+    -- Process payment only if required and payment data exists
+    IF p_payment_data IS NOT NULL AND JSON_EXTRACT(p_payment_data, '$.membership_fee') IS NOT NULL THEN
+        -- Create transaction
+        INSERT INTO tbl_transaction (
+            user_id,
+            amount,
+            transaction_type,
+            status,
+            proof_image
+        )
+        VALUES (
+            p_user_id,
+            v_fee_amount,
+            'Membership Fee',
+            'Pending',
+            JSON_UNQUOTE(JSON_EXTRACT(p_payment_data, '$.payment_proof'))
+        );
+        
+        -- Link transaction to membership
+        INSERT INTO tbl_transaction_membership (
+            transaction_id,
+            organization_id,
+            cycle_number
+        )
+        VALUES (
+            LAST_INSERT_ID(),
+            p_org_id,
+            v_cycle_number
+        );
+    END IF;
+    
+    -- Commit transaction
+    COMMIT;
+END$$
 
 DELIMITER ;
 

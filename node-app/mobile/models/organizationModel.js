@@ -31,9 +31,29 @@ async function getOrganizationQuestion(org_id) {
     }
 }
 
+async function getOrganizationFee(org_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL GetOrganizationFee(?);', [org_id]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+async function submitOrganizationApplication(org_id, question_id, answer, payment){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL ApplyForMembership(?, ?, ?, ?, ?);', [org_id, Auth.get_userId, payment, question_id, answer]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
 module.exports = {
     getOrganizations,
     getUserOrganization,
-    getOrganizationQuestion
+    getOrganizationQuestion,
+    getOrganizationFee,
+    submitOrganizationApplication
 };
 
