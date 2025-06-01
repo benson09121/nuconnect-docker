@@ -230,6 +230,277 @@ async function getOrganizationDashboardStats(organization_id) {
         connection.release();
     }
 }
+
+async function createExecutiveMember({
+    organization_id,
+    cycle_number,
+    email,
+    program_name,
+    role_title,
+    rank_level,
+    action_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        // Log the SQL call and parameters
+        console.log('SQL CALL: CALL CreateExecutiveMember(?, ?, ?, ?, ?, ?, ?);', [
+            organization_id,
+            cycle_number,
+            email,
+            program_name,
+            role_title,
+            rank_level,
+            action_by_email
+        ]);
+        await connection.query(
+            `CALL CreateExecutiveMember(?, ?, ?, ?, ?, ?, ?)`,
+            [
+                organization_id,
+                cycle_number,
+                email,
+                program_name,
+                role_title,
+                rank_level,
+                action_by_email
+            ]
+        );
+        // If no error, success
+        return { message: 'Executive member added successfully.' };
+    } catch (error) {
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function updateExecutiveMember({
+    organization_id,
+    cycle_number,
+    email,
+    program_name,
+    role_title,
+    rank_level,
+    action_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        console.log('SQL CALL: CALL UpdateExecutiveMember(?, ?, ?, ?, ?, ?, ?);', [
+            organization_id,
+            cycle_number,
+            email,
+            program_name,
+            role_title,
+            rank_level,
+            action_by_email
+        ]);
+        await connection.query(
+            `CALL UpdateExecutiveMember(?, ?, ?, ?, ?, ?, ?)`,
+            [
+                organization_id,
+                cycle_number,
+                email,
+                program_name,
+                role_title,
+                rank_level,
+                action_by_email
+            ]
+        );
+        return { message: 'Executive member updated successfully.' };
+    } catch (error) {
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function archiveExecutiveMember({
+    organization_id,
+    cycle_number,
+    email,
+    action_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        console.log('SQL CALL: CALL ArchiveExecutiveMember(?, ?, ?, ?);', [
+            organization_id,
+            cycle_number,
+            email,
+            action_by_email
+        ]);
+        await connection.query(
+            `CALL ArchiveExecutiveMember(?, ?, ?, ?)`,
+            [
+                organization_id,
+                cycle_number,
+                email,
+                action_by_email
+            ]
+        );
+        return { message: 'Executive member archived successfully.' };
+    } catch (error) {
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function getOrganizationCommittees(organization_id, cycle_number) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            'CALL GetOrganizationCommittees(?, ?);',
+            [organization_id, cycle_number]
+        );
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching organization committees:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function createCommittee({
+    organization_id,
+    cycle_number,
+    committee_name,
+    description,
+    action_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(
+            `CALL CreateCommittee(?, ?, ?, ?, ?)`,
+            [
+                organization_id,
+                cycle_number,
+                committee_name,
+                description,
+                action_by_email
+            ]
+        );
+        // The procedure returns the new committee_id as a result set
+        return rows[0][0]; // { committee_id: ... }
+    } catch (error) {
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function updateCommittee({
+    committee_id,
+    new_name,
+    new_description,
+    action_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        console.log('[updateCommittee] SQL CALL: CALL UpdateCommittee(?, ?, ?, ?)', [
+            committee_id,
+            new_name,
+            new_description,
+            action_by_email
+        ]);
+        const [rows] = await connection.query(
+            `CALL UpdateCommittee(?, ?, ?, ?)`,
+            [
+                committee_id,
+                new_name,
+                new_description,
+                action_by_email
+            ]
+        );
+        return rows[0][0]; // { rows_affected: ... }
+    } catch (error) {
+        console.error('[updateCommittee] SQL/Error:', error.sqlMessage || error.message, error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function archiveCommittee({
+    committee_id,
+    reason,
+    archived_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        console.log('[archiveCommittee] SQL CALL: CALL ArchiveCommittee(?, ?, ?)', [
+            committee_id,
+            reason,
+            archived_by_email
+        ]);
+        const [rows] = await connection.query(
+            `CALL ArchiveCommittee(?, ?, ?)`,
+            [
+                committee_id,
+                reason,
+                archived_by_email
+            ]
+        );
+        return rows[0][0]; // { committees_archived: ... }
+    } catch (error) {
+        console.error('[archiveCommittee] SQL/Error:', error.sqlMessage || error.message, error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function getCommitteeMembers(committee_id) {
+    const connection = await pool.getConnection();
+    try {
+        console.log('[getCommitteeMembers] SQL CALL: CALL GetCommitteeMembers(?)', [committee_id]);
+        const [results] = await connection.query(
+            'CALL GetCommitteeMembers(?)',
+            [committee_id]
+        );
+        // MySQL returns multiple result sets: [committeeInfo, members]
+        return {
+            committee: results[0]?.[0] || null,
+            members: results[1] || []
+        };
+    } catch (error) {
+        console.error('[getCommitteeMembers] SQL/Error:', error.sqlMessage || error.message, error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+async function addCommitteeMember({
+    committee_id,
+    user_email,
+    role,
+    action_by_email
+}) {
+    const connection = await pool.getConnection();
+    try {
+        console.log('[addCommitteeMember] SQL CALL: CALL AddCommitteeMember(?, ?, ?, ?)', [
+            committee_id,
+            user_email,
+            role,
+            action_by_email
+        ]);
+        const [rows] = await connection.query(
+            `CALL AddCommitteeMember(?, ?, ?, ?)`,
+            [
+                committee_id,
+                user_email,
+                role,
+                action_by_email
+            ]
+        );
+        return rows[0][0]; // { committee_member_id: ... }
+    } catch (error) {
+        console.error('[addCommitteeMember] SQL/Error:', error.sqlMessage || error.message, error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
       
 module.exports = {
     getOrganizations,
@@ -249,4 +520,14 @@ module.exports = {
     getEventRequirementSubmissionsByOrganization,
     getOrganizationIdByName,
     getOrganizationDashboardStats,
+    createExecutiveMember,
+    updateExecutiveMember,
+    archiveExecutiveMember,
+    getOrganizationCommittees,
+    createCommittee,
+    updateCommittee,
+    archiveCommittee,
+    getCommitteeMembers,
+    addCommitteeMember,
+
 };
