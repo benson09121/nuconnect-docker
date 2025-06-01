@@ -619,7 +619,6 @@ CREATE TABLE tbl_transaction_event(
     FOREIGN KEY (event_id) REFERENCES tbl_event(event_id) ON DELETE CASCADE
 );
 
-
 -- PROCEDURES
 use db_nuconnect;
 
@@ -1304,37 +1303,6 @@ BEGIN
 END $$
 DELIMITER ;
 
-
-DELIMITER $$
-CREATE DEFINER='admin'@'%' PROCEDURE CreateUser(
-    IN p_user_id VARCHAR(200),
-    IN p_f_name VARCHAR(50),
-    IN p_l_name VARCHAR(50),
-    IN p_email VARCHAR(50)
-)
-BEGIN
-    DECLARE student_role_id INT;
-    
-    SELECT role_id INTO student_role_id 
-    FROM tbl_role 
-    WHERE LOWER(role_name) = 'student';
-    
-    INSERT INTO tbl_user (
-        user_id,
-        f_name,
-        l_name,
-        email,
-        role_id
-    ) VALUES (
-        p_user_id,
-        p_f_name,
-        p_l_name,
-        p_email,
-        student_role_id
-    );
-END $$
-DELIMITER ;
-
 DELIMITER $$
 CREATE DEFINER='admin'@'%' PROCEDURE HandleLogin(
     IN p_azure_sub VARCHAR(200),
@@ -1347,34 +1315,76 @@ BEGIN
     DECLARE v_student_role_id INT;
     DECLARE v_current_status ENUM('Pending', 'Active', 'Suspended');
     DECLARE v_current_role_id INT;
+    DECLARE v_is_student BOOLEAN DEFAULT FALSE;
+    DECLARE v_conflict_user_email VARCHAR(50);
 
+    -- Get student role ID
     SELECT role_id INTO v_student_role_id 
     FROM tbl_role 
     WHERE LOWER(role_name) = 'student';
 
+    -- Get existing user details by email
     SELECT user_id, status, role_id 
     INTO v_existing_user_id, v_current_status, v_current_role_id
     FROM tbl_user 
     WHERE email = p_email;
 
+    -- Check if student
+    IF v_current_role_id IS NOT NULL THEN
+        SET v_is_student = (v_current_role_id = v_student_role_id);
+    END IF;
+
+    -- Scenario 1: Existing user found by email
     IF v_existing_user_id IS NOT NULL THEN
-
-        IF v_current_status = 'Pending' AND v_current_role_id != v_student_role_id THEN
-
+        -- Handle user_id mismatch
+        IF v_existing_user_id != p_azure_sub THEN
+            -- Check if new azure_sub is already used by another account
+            SELECT email INTO v_conflict_user_email
+            FROM tbl_user
+            WHERE user_id = p_azure_sub;
+            
+            IF v_conflict_user_email IS NOT NULL THEN
+                SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'Account conflict detected: Azure account already in use';
+            END IF;
+            
+            -- Safe to update user_id to new azure_sub
             UPDATE tbl_user 
-            SET user_id = p_azure_sub,
+            SET user_id = p_azure_sub
+            WHERE email = p_email;
+            
+            SET v_existing_user_id = p_azure_sub;  -- Update local variable
+        END IF;
+
+        -- For non-students in pending status: activate and update names
+        IF NOT v_is_student AND v_current_status = 'Pending' THEN
+            UPDATE tbl_user 
+            SET 
                 f_name = p_f_name,
                 l_name = p_l_name,
                 status = 'Active'
-            WHERE email = p_email;
+            WHERE user_id = v_existing_user_id;
+        -- For students: only update names if changed
         ELSE
-            IF v_existing_user_id != p_azure_sub THEN
-                SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Account conflict detected';
-            END IF;
+            UPDATE tbl_user 
+            SET 
+                f_name = p_f_name,
+                l_name = p_l_name
+            WHERE user_id = v_existing_user_id
+            AND (f_name != p_f_name OR l_name != p_l_name);
         END IF;
     ELSE
-
+        -- Check if azure_sub already exists with different email
+        SELECT email INTO v_conflict_user_email
+        FROM tbl_user
+        WHERE user_id = p_azure_sub;
+        
+        IF v_conflict_user_email IS NOT NULL THEN
+            SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Account conflict detected: Azure account already in use';
+        END IF;
+        
+        -- New user: create as active student
         INSERT INTO tbl_user (
             user_id,
             f_name,
@@ -3112,43 +3122,42 @@ BEGIN
     -- Returns { unavailable: [email1, email2, ...] }
     -- unavailable if: not student role OR is executive in any org
 
-    DECLARE unavailable_emails JSON DEFAULT JSON_ARRAY();
+    DECLARE v_unavailable_emails JSON;
 
-    -- 1. Not student role
-    SELECT JSON_ARRAYAGG(u.email)
-      INTO @not_students
-      FROM tbl_user u
-      JOIN tbl_role r ON u.role_id = r.role_id
-     WHERE JSON_CONTAINS(p_emails, CAST(u.email AS JSON))
-       AND LOWER(r.role_name) != 'student';
-
-    -- 2. Is executive in any org
-    SELECT JSON_ARRAYAGG(u.email)
-      INTO @executives
-      FROM tbl_user u
-      JOIN tbl_organization_members om ON u.user_id = om.user_id
-     WHERE JSON_CONTAINS(p_emails, CAST(u.email AS JSON))
-       AND om.member_type = 'Executive';
-
-    -- Merge both arrays, remove nulls
-    SET unavailable_emails = JSON_MERGE_PRESERVE(
-        COALESCE(@not_students, JSON_ARRAY()),
-        COALESCE(@executives, JSON_ARRAY())
+    -- Create a temporary table to hold the emails
+    CREATE TEMPORARY TABLE IF NOT EXISTS temp_emails (
+        email VARCHAR(255) NOT NULL,
+        PRIMARY KEY (email)  -- Ensures uniqueness
     );
 
-    -- Remove duplicates
-    SET unavailable_emails = (
-        SELECT JSON_ARRAYAGG(email) FROM (
-            SELECT DISTINCT jt.email
-            FROM JSON_TABLE(
-                unavailable_emails, '$[*]' COLUMNS (email VARCHAR(255) PATH '$')
-            ) jt
-        ) uniq
-    );
+    -- Insert from first condition: non-student roles
+    INSERT IGNORE INTO temp_emails (email)
+    SELECT u.email
+    FROM tbl_user u
+    JOIN tbl_role r ON u.role_id = r.role_id
+    WHERE 
+        JSON_CONTAINS(p_emails, CAST(CONCAT('"', u.email, '"') AS JSON))
+        AND LOWER(r.role_name) != 'student';
 
-    SELECT JSON_OBJECT('unavailable', COALESCE(unavailable_emails, JSON_ARRAY())) AS result;
+    -- Insert from second condition: executives
+    INSERT IGNORE INTO temp_emails (email)
+    SELECT u.email
+    FROM tbl_user u
+    JOIN tbl_organization_members om ON u.user_id = om.user_id
+    WHERE 
+        JSON_CONTAINS(p_emails, CAST(CONCAT('"', u.email, '"') AS JSON))
+        AND om.member_type = 'Executive';
+
+    -- Aggregate distinct emails
+    SELECT COALESCE(JSON_ARRAYAGG(email), JSON_ARRAY())
+    INTO v_unavailable_emails
+    FROM temp_emails;
+
+    -- Cleanup temporary table
+    DROP TEMPORARY TABLE IF EXISTS temp_emails;
+
+    SELECT JSON_OBJECT('unavailable', v_unavailable_emails) AS result;
 END $$
-
 DELIMITER ;
 
 DELIMITER $$
@@ -5775,6 +5784,140 @@ BEGIN
 END$$
 DELIMITER ;
 
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE ScanTicket(
+    IN p_email VARCHAR(100),
+    IN p_event_title VARCHAR(300),
+    IN p_verifier_user_id VARCHAR(200)  -- New parameter for verifier
+)
+BEGIN
+    DECLARE v_user_id VARCHAR(200);
+    DECLARE v_event_id INT;
+    DECLARE v_organization_id INT;
+    DECLARE v_attendance_id INT;
+    DECLARE v_is_authorized BOOLEAN DEFAULT FALSE;
+    
+    -- Get user ID from email
+    SELECT user_id INTO v_user_id
+    FROM tbl_user
+    WHERE email = p_email;
+    
+    IF v_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'User not found with the provided email';
+    END IF;
+    
+    -- Get event ID and organization from title
+    SELECT event_id, organization_id INTO v_event_id, v_organization_id
+    FROM tbl_event
+    WHERE title = p_event_title
+    AND status = 'Approved';
+    
+    IF v_event_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Active event not found with the provided title';
+    END IF;
+    
+    -- Verify scanning user's authority (Executive or Committee Head)
+    SELECT EXISTS (
+        SELECT 1
+        FROM tbl_organization_members om
+        JOIN tbl_renewal_cycle rc 
+            ON om.organization_id = rc.organization_id 
+            AND om.cycle_number = rc.cycle_number
+        WHERE om.organization_id = v_organization_id
+        AND om.user_id = p_verifier_user_id
+        AND om.status = 'Active'
+        AND (
+            om.member_type = 'Executive'  -- Executive members
+            OR (
+                om.member_type = 'Committee'  -- Committee Heads
+                AND EXISTS (
+                    SELECT 1
+                    FROM tbl_committee_members cm
+                    JOIN tbl_committee c ON cm.committee_id = c.committee_id
+                    WHERE cm.user_id = p_verifier_user_id
+                    AND c.organization_id = v_organization_id
+                    AND cm.role = 'Committee Head'
+                )
+            )
+        )
+    ) INTO v_is_authorized;
+    
+    IF NOT v_is_authorized THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'User not authorized to verify tickets for this event';
+    END IF;
+    
+    -- Find existing attendance record
+    SELECT attendance_id INTO v_attendance_id
+    FROM tbl_event_attendance
+    WHERE event_id = v_event_id
+    AND user_id = v_user_id
+    AND status IN ('Registered')  -- Only allow scan for these statuses
+    AND deleted_at IS NULL;  -- Not deleted
+    
+    IF v_attendance_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'No valid registration found for this user and event';
+    END IF;
+    
+    -- Update attendance record
+    UPDATE tbl_event_attendance
+    SET 
+        status = 'Attended',
+        time_in = NOW()
+    WHERE attendance_id = v_attendance_id;
+    
+    -- Return success message
+    SELECT 'Ticket scanned successfully' AS message;
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE AddEventRequirement(
+    IN p_requirement_name VARCHAR(255),
+    IN p_requirement_type ENUM('pre-event', 'post-event'),
+    IN p_savePath VARCHAR(255),  -- Can be NULL
+    IN p_created_by VARCHAR(200)
+)
+BEGIN
+    DECLARE v_user_exists INT;
+
+    -- Validate requirement name
+    IF TRIM(p_requirement_name) = '' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Requirement name cannot be empty';
+    END IF;
+
+    -- Check if creating user exists
+    SELECT COUNT(*) INTO v_user_exists
+    FROM tbl_user
+    WHERE user_id = p_created_by;
+
+    IF v_user_exists = 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Creating user does not exist';
+    END IF;
+
+    -- Insert the new requirement
+    INSERT INTO tbl_event_application_requirement (
+        requirement_name,
+        is_applicable_to,
+        file_path,
+        created_by
+    ) VALUES (
+        p_requirement_name,
+        p_requirement_type,
+        NULLIF(p_savePath, ''),  -- Convert empty string to NULL
+        p_created_by
+    );
+    
+    -- Return success message with new ID
+    SELECT CONCAT('Requirement added successfully. ID: ', LAST_INSERT_ID()) AS message;
+END$$
+DELIMITER ;
+
 
 -- INDEXES
 
@@ -5828,7 +5971,7 @@ VALUES("CREATE_EVENT"),
 ("DELETE_COMMITTEE"),
 ("VIEW_COMMITTEE"),
 ("MANAGE_REQUIREMENTS"),
-("VIEW_APPLICATION_FORM"),
+("VIEW_APPLICATION"),
 ("MANAGE_APPLICATIONS"),
 ("CREATE_EVALUATION"),
 ("UPDATE_EVALUATION"),
@@ -5867,7 +6010,16 @@ VALUES
 (3,17),
 (4,17),
 (5,17),
-(6,17);
+(6,17),
+(3,23),
+(5,23),
+(6,23),
+(3,9),
+(5,9),
+(6,9),
+(3,16),
+(5,16),
+(6,16);
 
 
 INSERT INTO tbl_program (name, description) VALUES 
@@ -5875,12 +6027,8 @@ INSERT INTO tbl_program (name, description) VALUES
 ("Bachelor of Science in Computer Science", "BSCS");
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
-("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 1),
-("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 6),
-("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,5),
-("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
-("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
+("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4);
+
 
 
 
@@ -5890,59 +6038,6 @@ INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
 (3, 'Secretary', 'Administrative lead'),
 (4, 'Treasurer', 'Financial manager'),
 (5, 'Officer', 'General executive member');
-
-
-INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "NU Dasmariñas Student Development and Activities Office", "SDAO", null, "Approved", "Whole Academic Year", 0, 0, 1),
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
-("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
-
-
-INSERT INTO tbl_event (
-  event_id,
-  organization_id,
-  user_id,
-  title,
-  description,
-  venue_type,
-  venue,
-  start_date,
-  end_date,
-  start_time,
-  end_time,
-  status,
-  type,
-  is_open_to,
-  fee,
-  capacity,
-  created_at,
-  certificate
-) VALUES
-(1001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Innovation Pitch Fest', 'A competition for pitching new ideas', 'Face to face', 'NU Hall A', '2025-06-10', '2025-06-10', '09:00:00', '15:00:00', 'Approved', 'Paid', 'Open to all', 50, 100, '2025-05-01 08:00:00', 'Participation Certificate'),
-
-(1002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Groove Jam 2025', 'Annual inter-school dance battle', 'Face to face', 'Open Grounds', '2025-07-20', '2025-07-20', '13:00:00', '19:00:00', 'Approved', 'Free', 'Open to all', 0, 300, '2025-05-05 10:30:00', 'Winner + Participation'),
-
-(1003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Hack-It-Out', '24-hour Hackathon for IT majors', 'Face to face', 'Tech Lab 101', '2025-08-05', '2025-08-05', '08:00:00', '08:00:00', 'Pending', 'Paid', 'Members only', 200, 60, '2025-05-12 15:45:00', 'Certificate + Swag'),
-
-(1004, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'Earth Hour Rally', 'Tree planting and cleanup event', 'Face to face', 'Community Park', '2025-06-15', '2025-06-15', '06:30:00', '10:30:00', 'Approved', 'Free', 'Open to all', 0, 150, '2025-05-15 09:00:00', 'Eco Warrior Badge'),
-
-(1005, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', 'E-Sports Showdown', 'Inter-university e-sports competition', 'Face to face', 'Auditorium', '2025-07-01', '2025-07-01', '10:00:00', '18:00:00', 'Rejected', 'Paid', 'Open to all', 100, 500, '2025-05-10 13:15:00', 'Winner Certificate'),
-
-(2001, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Tech Expo', 'Annual technology exposition', 'Face to face', 'NU Convention Center', '2023-03-10', '2023-03-10', '08:00:00', '17:00:00', 'Approved', 'Free', 'Open to all', 0, 500, '2023-02-01 09:00:00', 'Certificate of Participation'),
-
-(2002, 2, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Coding Bootcamp', 'Intensive coding bootcamp for beginners', 'Face to face', 'Lab 202', '2023-04-15', '2023-04-17', '09:00:00', '16:00:00', 'Approved', 'Paid', 'Members only', 100, 50, '2023-03-10 10:00:00', 'Certificate of Completion'),
-
-(2003, 1, 'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k', '2023 Summer Seminar', 'Seminar on emerging technologies', 'Online', 'Zoom', '2023-05-05', '2023-05-05', '10:00:00', '12:00:00', 'Approved', 'Free', 'NU Students only', 0, 200, '2023-04-20 11:00:00', 'E-Certificate');
-
-INSERT INTO tbl_application_period(start_date, end_date, start_time, end_time, is_active, created_by) 
-VALUES(
-"2025-05-24",
-"2025-06-20",
-"15:24:00",
-"10:00:00",
-1,
-"6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0"
-);
 
 -- Insert evaluation question groups
 INSERT INTO tbl_evaluation_question_group (group_title, group_description, is_active)
@@ -5983,219 +6078,11 @@ VALUES
 ('What did you like least about the activity?', 'textbox', 6, TRUE),
 ('Any other comments/suggestions for further improvement the activity?', 'textbox', 6, TRUE);
 
-INSERT INTO tbl_application_requirement(
-requirement_name, 
-is_applicable_to, 
-file_path, 
-created_by, 
-created_at, 
-updated_at
-) 
-VALUES
-('Letter of Intent', 'new', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
-('Student Org Application Form', 'new', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
-('By Laws of the Organization', 'new', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
-('List of Officers/Founders', 'new', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
-('Letter from the College Dean', 'new', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
-('List of Members', 'new', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
-('Latest Certificate of Grades of Officers', 'new', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30'),
-('Biodata/CV of Officers', 'new', 'requirement-1747711248943-CV-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:48', '2025-05-20 11:20:48'),
-('List of Proposed Projects with Proposed Budget for the AY', 'new', 'requirement-1747711260498-List-of-Proposed-Project-with-Proposed-Budget.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:21:00', '2025-05-20 11:21:00');
 
-INSERT INTO tbl_event_application_requirement (
-    requirement_name,
-    is_applicable_to,
-    file_path,
-    created_by,
-    created_at,
-    updated_at
-) VALUES
-('Event Proposal Form', 'pre-event', 'requirement-1747711120933-Letter-of-Intent.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:18:40', '2025-05-20 11:18:40'),
-('Program Flow', 'pre-event', 'requirement-1747711141257-ACO-SA-F-002Student-Org-Application-Form.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:01', '2025-05-20 11:19:01'),
-('Budget Proposal', 'pre-event', 'requirement-1747711157238-Constitution-and-ByLaws.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:17', '2025-05-20 11:19:17'),
-('Attendance Sheet', 'post-event', 'requirement-1747711169050-List-of-Officers-and-Founders.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:29', '2025-05-20 11:19:29'),
-('Event Photos', 'post-event', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
-('Narrative Report', 'post-event', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
-('Financial Report', 'post-event', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30');
-
-CALL CreateOrganizationApplication(
-    '{
-        "organization_name": "Data Science Club",
-        "organization_description": "Club for data science enthusiasts",
-        "organization_logo": "ds-club-logo.png",
-        "fee_duration": "Free",
-        "fee_amount": null,
-        "category": "Extra Curricular Organization"
-    }',
-    '[{
-        "f_name": "Alex",
-        "l_name": "Johnson",
-        "role_name": "President",
-        "nu_email": "alex.johnson@students.nu-dasma.edu.ph",
-        "rank_number": 5
-    }, {
-        "f_name": "Maria",
-        "l_name": "Garcia",
-        "role_name": "Vice President",
-        "nu_email": "maria.garcia@students.nu-dasma.edu.ph",
-        "rank_number": 4
-    }]',
-    '[{
-        "requirement_id": 1,
-        "requirement_path": "letter-of-intent-ds.pdf"
-    }, {
-        "requirement_id": 2,
-        "requirement_path": "application-form-ds.pdf"
-    }]',
-    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA'  -- Samantha's user_id with Adviser role
-);
-
-
-CALL ApproveApplication(
-    2,                    -- approval_id
-    'Looks good, approved', -- comment
-    4,                    -- organization_id
-    1                     -- application_id
-);
-
-CALL ApproveApplication(
-    3,                    -- approval_id
-    'Looks good, approved', -- comment
-    4,                    -- organization_id
-    1                     -- application_id
-);
-
-CALL ApproveApplication(
-    4,                    -- approval_id
-    'Looks good, approved', -- comment
-    4,                    -- organization_id
-    1                     -- application_id
-);
-
-CALL ApproveApplication(
-    5,                    -- approval_id
-    'Looks good, approved', -- comment
-    4,                    -- organization_id
-    1                     -- application_id
-);
-
-CALL CreateEventApplication(
-    4,  -- organization_id
-    1,  -- cycle_number
-    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', -- applicant_user_id
-    '{
-        "title": "for reject",
-        "description": "Annual technology conference",
-        "venue_type": "Face to face",
-        "venue": "NU Dasma Campus",
-        "start_date": "2025-11-15",
-        "end_date": "2025-11-17",
-        "start_time": "09:00:00",
-        "end_time": "17:00:00",
-        "type": "Paid",
-        "is_open_to": "Open to all",
-        "fee": 500,
-        "capacity": 200
-    }',
-    '[
-        {"requirement_id": 1, "file_path": "uploads/proposal.pdf"},
-        {"requirement_id": 2, "file_path": "uploads/program_flow.pdf"},
-        {"requirement_id": 3, "file_path": "uploads/budget.xlsx"}
-    ]'
-);
-
-CALL ApproveEventApplication(
-    1,                        -- approval_id
-    'Looks good, approved',   -- comment
-    1,                      -- event_application_id
-    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA' -- user_id
-);
-
-CALL ApproveEventApplication(
-    2,                        -- approval_id
-    'Looks good, approved',   -- comment
-    1,                      -- event_application_id
-    'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k' -- user_id
-);
-
-CALL ApproveEventApplication(
-    3,                        -- approval_id
-    'Looks good, approved',   -- comment
-    1,                      -- event_application_id
-    '5fb95ed0a0d20daf' -- user_id
-);
-
-CALL ApproveEventApplication(
-    4,                        -- approval_id
-    'Looks good, approved',   -- comment
-    1,                      -- event_application_id
-    '900f929ec408cb4' -- user_id
-);
-
-CALL ApproveEventApplication(
-    5,                        -- approval_id
-    'Looks good, approved',   -- comment
-    1,                      -- event_application_id
-    '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU' -- user_id
-);
-
-CALL CreateEventApplication(
-    4,  -- organization_id
-    1,  -- cycle_number
-    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', -- applicant_user_id
-    '{
-        "title": "Past Workshop Example",
-        "description": "Web development workshop for beginners",
-        "venue_type": "Face to face",
-        "venue": "NU Dasma Computer Lab",
-        "start_date": "2025-05-10", 
-        "end_date": "2025-05-12", 
-        "start_time": "13:00:00",
-        "end_time": "16:00:00",
-        "type": "Free",
-        "is_open_to": "Open to all",
-        "fee": 0,
-        "capacity": 30
-    }',
-    '[
-        {"requirement_id": 1, "file_path": "uploads/workshop_proposal.pdf"},
-        {"requirement_id": 2, "file_path": "uploads/workshop_schedule.pdf"},
-        {"requirement_id": 3, "file_path": "uploads/workshop_materials.pdf"}
-    ]'
-);
-
-CALL ApproveEventApplication(
-    6,                        -- approval_id
-    'Looks good, approved',   -- comment
-    2,                      -- event_application_id
-    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA' -- user_id
-);
-
-CALL ApproveEventApplication(
-    7,                        -- approval_id
-    'Looks good, approved',   -- comment
-    2,                      -- event_application_id
-    'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k' -- user_id
-);
-
-CALL ApproveEventApplication(
-    8,                        -- approval_id
-    'Looks good, approved',   -- comment
-    2,                      -- event_application_id
-    '5fb95ed0a0d20daf' -- user_id
-);
-
-CALL ApproveEventApplication(
-    9,                        -- approval_id
-    'Looks good, approved',   -- comment
-    2,                      -- event_application_id
-    '900f929ec408cb4' -- user_id
-);
-
-CALL ApproveEventApplication(
-    10,                        -- approval_id
-    'Looks good, approved',   -- comment
-    2,                      -- event_application_id
-    '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU' -- user_id
-);
-
+INSERT INTO tbl_rank_permission(rank_id, permission_id) VALUES
+(1,9),
+(1,16),
+(1,11),
+(1,12),
+(1,13),
+(1,14);
