@@ -98,6 +98,21 @@ async function addApplicationPeriod(startDate, endDate, startTime, endTime, user
     finally {
         connection.release();
     }
+
+}
+async function addEventRequirement(requirement_name, requirement_type, savePath, user_id){
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL AddEventRequirement(?, ?, ?, ?);', [requirement_name, requirement_type, savePath, user_id]);
+        return rows[0];
+    }
+    catch (error) {
+        console.error('Error adding event requirement:', error);
+        throw error;
+    }
+    finally {
+        connection.release();
+    }
 }
 
 async function getAllPeriodsWithApplications() {
@@ -185,5 +200,6 @@ module.exports = {
     getActiveApplicationPeriod,
     getActiveApplicationPeriodSimple,
     updateApplicationPeriod,
-    terminateActiveApplicationPeriod
+    terminateActiveApplicationPeriod,
+    addEventRequirement
 };

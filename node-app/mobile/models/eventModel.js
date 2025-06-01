@@ -200,6 +200,16 @@ async function getAllEventCertificates() {
     }
 }
 
+async function scanTicket(email, event_id) {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query('CALL ScanTicket(?, ?, ?);', [email, event_id, Auth.get_userId]);
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
 module.exports = {
     getAllEvents,
     createEvent,
@@ -216,5 +226,6 @@ module.exports = {
     addGeneratedCertificate,
     getEvaluation,
     submitEvaluation,
-    getAllEventCertificates
+    getAllEventCertificates,
+    scanTicket
 };

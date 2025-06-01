@@ -55,7 +55,6 @@ async function getRequirements(req, res) {
 async function downloadTemplate(req, res) {
     const template_name  = req.query.template_name;
     try {
-        res.header('Access-Control-Allow-Origin', 'http://localhost:5173');
         res.setHeader('X-Accel-Redirect', `/protected-requirements/${template_name}`);
         const match = template_name.match(/requirement-(\d+)-(.+)/);
         // Use the original filename if available, fallback to template_name
@@ -238,6 +237,61 @@ async function terminateActiveApplicationPeriod(req, res) {
     }
 }
 
+async function addEventRequirement(req, res) {
+    try {
+        const { requirement_name, requirement_type } = req.body;
+        if (!req.files || !req.files.template) {
+            return res.status(400).json({ message: 'No file uploaded' });
+        }
+
+        const uploadedFile = req.files.template;
+
+        // Optionally validate file type here if needed
+        // Example: Only allow PDFs
+        // if (uploadedFile.mimetype !== 'application/pdf') {
+        //     return res.status(400).json({ message: 'Only PDF files allowed' });
+        // }
+
+        // Save file to disk
+        const requirementsDir = '/app/requirements';
+        if (!fs.existsSync(requirementsDir)) {
+            fs.mkdirSync(requirementsDir, { recursive: true });
+        }
+        const filename = `requirement-${Date.now()}-${uploadedFile.name}`;
+        const savePath = path.join(requirementsDir, filename);
+
+        try {
+            fs.writeFileSync(savePath, uploadedFile.data);
+        } catch (writeError) {
+            return res.status(500).json({ message: 'Error saving file', error: writeError.message });
+        }
+
+        await requirementModel.addEventRequirement(requirement_name, requirement_type, filename, req.user.user_id);
+        res.status(201).json({ message: 'Requirement uploaded successfully'});
+    } catch (err) {
+        console.log(err);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+async function getEventRequirementTemplate(req, res) {
+   const template_name  = req.query.template_name;
+    try {
+        res.setHeader('X-Accel-Redirect', `/protected-requirements/${template_name}`);
+        const match = template_name.match(/requirement-(\d+)-(.+)/);
+        // Use the original filename if available, fallback to template_name
+        const downloadName = match[0];
+        res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+        // Optionally, send a short message for debugging (remove in production)
+        // res.end('File download triggered');
+        res.end();
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching the requirements.",
+        });
+    }
+}
+
 module.exports = {
     addRequirement,
     getRequirements,
@@ -249,5 +303,7 @@ module.exports = {
     getActiveApplicationPeriodSimple,
     getActiveApplicationPeriod,
     updateApplicationPeriod,
-    terminateActiveApplicationPeriod 
-}
+    terminateActiveApplicationPeriod,
+    getEventRequirementTemplate,
+    addEventRequirement
+};
