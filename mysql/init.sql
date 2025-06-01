@@ -73,7 +73,7 @@ CREATE TABLE tbl_organization(
     description TEXT,
     base_program_id INT NULL, -- NULL meaning open to all
     logo VARCHAR(255),
-    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal') DEFAULT 'Pending',
+    status ENUM('Pending', 'Approved', 'Rejected', 'Renewal', 'Archived') DEFAULT 'Pending',
     membership_fee_type ENUM('Per Term', 'Whole Academic Year',"Free") NOT NULL DEFAULT 'Free',
     category ENUM('Co-Curricular Organization', 'Extra Curricular Organization') DEFAULT 'Co-Curricular Organization',
     membership_fee_amount DECIMAL(10,2) NULL,
@@ -242,6 +242,39 @@ CREATE TABLE tbl_committee_role_permission (
     FOREIGN KEY (permission_id) REFERENCES tbl_permission(permission_id) ON DELETE CASCADE
 );
 
+CREATE TABLE tbl_archived_organization_members (
+    archived_id INT AUTO_INCREMENT PRIMARY KEY,
+    member_id INT NOT NULL,
+    organization_id INT NOT NULL,
+    cycle_number INT NOT NULL,
+    user_id VARCHAR(200) NOT NULL,
+    member_type ENUM('Member', 'Executive', 'Committee') NOT NULL,
+    executive_role_id INT DEFAULT NULL,
+    committee_id INT DEFAULT NULL,
+    committee_role ENUM('Committee Head', 'Committee Officer') DEFAULT NULL,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_by VARCHAR(200) NOT NULL, 
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number),
+    FOREIGN KEY (user_id) REFERENCES tbl_user(user_id),
+    FOREIGN KEY (executive_role_id) REFERENCES tbl_executive_role(executive_role_id),
+    FOREIGN KEY (committee_id) REFERENCES tbl_committee(committee_id)
+);
+
+CREATE TABLE tbl_archived_committees (
+    archive_id INT AUTO_INCREMENT PRIMARY KEY,
+    original_committee_id INT NOT NULL,
+    organization_id INT NOT NULL,
+    cycle_number INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP NOT NULL,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_by VARCHAR(200) NOT NULL,
+    reason VARCHAR(255),
+    FOREIGN KEY (organization_id, cycle_number) REFERENCES tbl_renewal_cycle(organization_id, cycle_number),
+    FOREIGN KEY (archived_by) REFERENCES tbl_user(user_id)
+);
+
 
 
 CREATE TABLE tbl_event (
@@ -251,7 +284,7 @@ CREATE TABLE tbl_event (
     title VARCHAR(300) NOT NULL,
     description TEXT NOT NULL,
     venue_type ENUM('Face to face', 'Online') DEFAULT 'face to face',
-    venue VARCHAR(200) NOT NULL,
+    venue VARCHAR(200) NULL,
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
     start_time TIME NOT NULL,
@@ -306,19 +339,6 @@ CREATE TABLE tbl_event_approval_process (
         REFERENCES tbl_event_application(event_application_id),
     FOREIGN KEY (approver_id) REFERENCES tbl_user(user_id),
     FOREIGN KEY (approval_role_id) REFERENCES tbl_role(role_id)
-);
-
-
-CREATE TABLE tbl_event_application_submission (
-    submission_id INT AUTO_INCREMENT PRIMARY KEY,
-    event_application_id INT,
-    requirement_id INT NOT NULL,
-    file_path VARCHAR(255) NOT NULL,
-    submitted_by VARCHAR(200) NOT NULL,
-    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (event_application_id) REFERENCES tbl_event_application(event_application_id),
-    FOREIGN KEY (requirement_id) REFERENCES tbl_event_application_requirement(requirement_id),
-    FOREIGN KEY (submitted_by) REFERENCES tbl_user(user_id)
 );
 
 CREATE TABLE tbl_event_requirement_submissions (
@@ -3160,6 +3180,7 @@ BEGIN
     -- Return organization data as JSON
     SELECT JSON_OBJECT(
         'organization_detail', JSON_OBJECT(
+            'id', o.organization_id,
             'org_name', o.name,
             'category', o.category,
             'logo', o.logo,
@@ -3198,11 +3219,13 @@ BEGIN
                 'first_name', u.f_name,
                 'last_name', u.l_name,
                 'email', u.email,
-                'role_title', er.role_title
+                'role_title', er.role_title,
+                'program_name', p.name
             ))
             FROM tbl_organization_members om
             JOIN tbl_user u ON om.user_id = u.user_id
             JOIN tbl_executive_role er ON om.executive_role_id = er.executive_role_id
+            LEFT JOIN tbl_program p ON u.program_id = p.program_id
             WHERE om.organization_id = @org_id
                 AND om.cycle_number = @current_cycle
                 AND om.member_type = 'Executive'
@@ -4554,6 +4577,1205 @@ END$$
 
 DELIMITER ;
 
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationEventApplications(
+    IN p_org_name VARCHAR(100)
+)
+BEGIN
+    DECLARE v_organization_id INT;
+
+    -- Lookup organization_id from name
+    SELECT organization_id INTO v_organization_id
+    FROM tbl_organization
+    WHERE name = p_org_name
+    LIMIT 1;
+
+    IF v_organization_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Organization not found';
+    END IF;
+
+    -- Get all event applications for the organization, with event and applicant details
+    SELECT 
+        ea.event_application_id,
+        ea.organization_id,
+        o.name AS organization_name,
+        o.adviser_id,
+        CONCAT(adviser.f_name, ' ', adviser.l_name) AS adviser_name,
+        ea.cycle_number,
+        rc.start_date AS cycle_start_date,
+        ea.proposed_event_id,
+        e.title AS event_title,
+        e.description AS event_description,
+        e.venue_type,
+        e.venue,
+        e.start_date,
+        e.end_date,
+        e.start_time,
+        e.end_time,
+        e.status AS event_status,
+        e.type,
+        e.is_open_to,
+        e.fee,
+        e.capacity,
+        e.created_at AS event_created_at,
+        ea.applicant_user_id,
+        CONCAT(applicant.f_name, ' ', applicant.l_name) AS applicant_name,
+        applicant.email AS applicant_email,
+        ea.status AS application_status,
+        ea.created_at AS application_created_at,
+        ea.updated_at AS application_updated_at
+    FROM tbl_event_application ea
+    JOIN tbl_organization o ON ea.organization_id = o.organization_id
+    LEFT JOIN tbl_event e ON ea.proposed_event_id = e.event_id
+    JOIN tbl_renewal_cycle rc ON ea.organization_id = rc.organization_id 
+        AND ea.cycle_number = rc.cycle_number
+    JOIN tbl_user applicant ON ea.applicant_user_id = applicant.user_id
+    JOIN tbl_user adviser ON o.adviser_id = adviser.user_id
+    WHERE ea.organization_id = v_organization_id
+    ORDER BY ea.created_at DESC;
+
+    -- Get all submitted requirements/files for all applications of this organization
+    SELECT 
+        ers.submission_id,
+        ers.event_application_id,
+        ers.requirement_id,
+        ear.requirement_name,
+        ear.is_applicable_to,
+        ers.file_path,
+        ers.submitted_by,
+        CONCAT(u.f_name, ' ', u.l_name) AS submitted_by_name,
+        ers.submitted_at
+    FROM tbl_event_requirement_submissions ers
+    JOIN tbl_event_application_requirement ear ON ers.requirement_id = ear.requirement_id
+    JOIN tbl_user u ON ers.submitted_by = u.user_id
+    WHERE ers.organization_id = v_organization_id
+    ORDER BY ers.event_application_id, ear.is_applicable_to, ear.requirement_name;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetEventRequirementSubmissionsByOrganization(
+    IN p_organization_id INT
+)
+BEGIN
+    SELECT
+        ers.submission_id,
+        ers.event_id,
+        e.title AS event_title,
+        ers.event_application_id,
+        ers.cycle_number,
+        ers.organization_id,
+        o.name AS organization_name,
+        ers.requirement_id,
+        req.requirement_name,
+        req.is_applicable_to,
+        ers.file_path,
+        ers.submitted_by,
+        u.f_name AS submitted_by_first_name,
+        u.l_name AS submitted_by_last_name,
+        u.email AS submitted_by_email,
+        ers.submitted_at
+    FROM tbl_event_requirement_submissions ers
+    LEFT JOIN tbl_event e ON ers.event_id = e.event_id
+    LEFT JOIN tbl_organization o ON ers.organization_id = o.organization_id
+    LEFT JOIN tbl_event_application_requirement req ON ers.requirement_id = req.requirement_id
+    LEFT JOIN tbl_user u ON ers.submitted_by = u.user_id
+    WHERE ers.organization_id = p_organization_id
+    ORDER BY ers.submitted_at DESC;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationDashboardStats(
+    IN p_organization_id INT
+)
+BEGIN
+    DECLARE v_current_cycle INT;
+
+    -- Get current cycle
+    SELECT MAX(cycle_number) INTO v_current_cycle
+    FROM tbl_renewal_cycle
+    WHERE organization_id = p_organization_id;
+
+    -- Total members (excluding executives and committee members)
+    SELECT COUNT(*) INTO @total_members
+    FROM tbl_organization_members om
+    WHERE om.organization_id = p_organization_id
+      AND om.cycle_number = v_current_cycle
+      AND om.member_type = 'Member'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM tbl_committee_members cm
+          JOIN tbl_committee c ON cm.committee_id = c.committee_id
+          WHERE c.organization_id = p_organization_id
+            AND c.cycle_number = v_current_cycle
+            AND cm.user_id = om.user_id
+      );
+
+    -- Total events
+    SELECT COUNT(*) INTO @total_events
+    FROM tbl_event
+    WHERE organization_id = p_organization_id;
+
+    -- Total upcoming events
+    SELECT COUNT(*) INTO @total_upcoming_events
+    FROM tbl_event
+    WHERE organization_id = p_organization_id
+      AND start_date >= CURDATE();
+
+    -- Total post-event reports submitted
+    SELECT COUNT(*) INTO @total_reports
+    FROM tbl_event_requirement_submissions ers
+    JOIN tbl_event_application_requirement ear ON ers.requirement_id = ear.requirement_id
+    WHERE ers.organization_id = p_organization_id
+      AND ear.is_applicable_to = 'post-event';
+
+    -- Total pre-event requirements submitted
+    SELECT COUNT(*) INTO @pre_event_requirements_submitted
+    FROM tbl_event_requirement_submissions ers
+    JOIN tbl_event_application_requirement ear ON ers.requirement_id = ear.requirement_id
+    WHERE ers.organization_id = p_organization_id
+      AND ear.is_applicable_to = 'pre-event';
+
+    -- Return as one row
+    SELECT
+        @total_members AS total_members,
+        @total_events AS total_events,
+        @total_reports AS total_reports,
+        @pre_event_requirements_submitted AS pre_event_requirements_submitted,
+        @total_upcoming_events AS total_upcoming_events;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE DEFINER='admin'@'%' PROCEDURE CreateSDAOEvent(
+    IN p_organization_id INT,
+    IN p_user_id VARCHAR(200),
+    IN p_title VARCHAR(300),
+    IN p_description TEXT,
+    IN p_venue_type ENUM('Face to face', 'Online'),
+    IN p_venue VARCHAR(200),
+    IN p_start_date DATE,
+    IN p_end_date DATE,
+    IN p_start_time TIME,
+    IN p_end_time TIME,
+    IN p_status ENUM('Pending', 'Approved', 'Rejected', 'Archived'),
+    IN p_type ENUM('Paid', 'Free'),
+    IN p_is_open_to ENUM('Members only', 'Open to all', 'NU Students only'),
+    IN p_fee INT,
+    IN p_capacity INT,
+    IN p_certificate VARCHAR(1000)
+)
+BEGIN
+    INSERT INTO tbl_event (
+        organization_id,
+        user_id,
+        title,
+        description,
+        venue_type,
+        venue,
+        start_date,
+        end_date,
+        start_time,
+        end_time,
+        status,
+        type,
+        is_open_to,
+        fee,
+        capacity,
+        certificate
+    ) VALUES (
+        p_organization_id,
+        p_user_id,
+        p_title,
+        p_description,
+        p_venue_type,
+        p_venue,
+        p_start_date,
+        p_end_date,
+        p_start_time,
+        p_end_time,
+        p_status,
+        p_type,
+        p_is_open_to,
+        p_fee,
+        p_capacity,
+        p_certificate
+    );
+
+    SELECT * FROM tbl_event WHERE event_id = LAST_INSERT_ID();
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE CreateExecutiveMember(
+    IN p_organization_id INT,
+    IN p_cycle_number INT,
+    IN p_email VARCHAR(100),
+    IN p_program_name VARCHAR(50),
+    IN p_role_title VARCHAR(100),
+    IN p_rank_level INT,
+    IN p_action_by_email VARCHAR(100)
+)
+BEGIN
+    DECLARE v_action_by_user_id VARCHAR(200);
+    DECLARE v_user_id VARCHAR(200);
+    DECLARE v_role_id INT;
+    DECLARE v_executive_role_id INT;
+    DECLARE v_rank_id INT;
+    DECLARE v_organization_exists INT;
+    DECLARE v_cycle_exists INT;
+    DECLARE v_current_membership INT;
+    DECLARE v_program_id INT;
+
+    -- Look up program_id from program name
+    SELECT program_id INTO v_program_id
+    FROM tbl_program
+    WHERE name = p_program_name
+    LIMIT 1;
+
+    IF v_program_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Program not found';
+    END IF;
+
+    -- Validate organization exists and is active
+    SELECT COUNT(*) INTO v_organization_exists 
+    FROM tbl_organization 
+    WHERE organization_id = p_organization_id 
+    AND status IN ('Approved', 'Renewal');
+    
+    IF v_organization_exists = 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Organization not found or not active';
+    END IF;
+
+    -- Validate renewal cycle exists
+    SELECT COUNT(*) INTO v_cycle_exists 
+    FROM tbl_renewal_cycle 
+    WHERE organization_id = p_organization_id 
+    AND cycle_number = p_cycle_number;
+    
+    IF v_cycle_exists = 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Renewal cycle not found';
+    END IF;
+
+    -- Get user_id of the action performer
+    SELECT user_id INTO v_action_by_user_id 
+    FROM tbl_user 
+    WHERE email = p_action_by_email 
+    LIMIT 1;
+
+    IF v_action_by_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Action performer not found';
+    END IF;
+
+    -- Get role_id for 'Student'
+    SELECT role_id INTO v_role_id 
+    FROM tbl_role 
+    WHERE LOWER(role_name) = 'student' 
+    LIMIT 1;
+
+    -- Check if user exists
+    SELECT user_id INTO v_user_id 
+    FROM tbl_user 
+    WHERE email = p_email 
+    LIMIT 1;
+
+    -- Check if user is already a member in this cycle
+    IF v_user_id IS NOT NULL THEN
+        SELECT COUNT(*) INTO v_current_membership
+        FROM tbl_organization_members
+        WHERE organization_id = p_organization_id
+        AND cycle_number = p_cycle_number
+        AND user_id = v_user_id;
+
+        IF v_current_membership > 0 THEN
+            SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'User is already a member in this cycle';
+        END IF;
+    END IF;
+
+    IF v_user_id IS NULL THEN
+        -- Create new user with pending status
+        SET v_user_id = CONCAT('usr-', UUID_SHORT());
+        
+        INSERT INTO tbl_user (
+            user_id,
+            email,
+            role_id,
+            program_id,
+            status,
+            created_at,
+            updated_at
+        ) VALUES (
+            v_user_id,
+            p_email,
+            v_role_id,
+            v_program_id,
+            'Pending',
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        );
+    END IF;
+
+    -- Get rank_id from the specified rank level
+    SELECT rank_id INTO v_rank_id 
+    FROM tbl_executive_rank 
+    WHERE rank_level = p_rank_level
+    LIMIT 1;
+
+    IF v_rank_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Invalid rank level';
+    END IF;
+
+    -- Create executive role if not exists
+    SELECT executive_role_id INTO v_executive_role_id
+    FROM tbl_executive_role
+    WHERE organization_id = p_organization_id
+      AND cycle_number = p_cycle_number
+      AND role_title = p_role_title
+      AND rank_id = v_rank_id
+    LIMIT 1;
+
+    IF v_executive_role_id IS NULL THEN
+        INSERT INTO tbl_executive_role (
+            organization_id,
+            cycle_number,
+            role_title,
+            rank_id,
+            created_at
+        ) VALUES (
+            p_organization_id,
+            p_cycle_number,
+            p_role_title,
+            v_rank_id,
+            CURRENT_TIMESTAMP
+        );
+        
+        SET v_executive_role_id = LAST_INSERT_ID();
+    END IF;
+
+    -- Insert into organization members as Executive
+    INSERT INTO tbl_organization_members (
+        organization_id, 
+        cycle_number, 
+        user_id, 
+        member_type, 
+        executive_role_id,
+        joined_at
+    ) VALUES (
+        p_organization_id, 
+        p_cycle_number, 
+        v_user_id, 
+        'Executive', 
+        v_executive_role_id,
+        CURRENT_TIMESTAMP
+    );
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id, 
+        action, 
+        type, 
+        meta_data,
+        timestamp
+    ) VALUES (
+        v_action_by_user_id,
+        CONCAT('Added executive member: ', v_user_id, ' (', p_email, ') as ', p_role_title),
+        'executive_member',
+        JSON_OBJECT(
+            'organization_id', p_organization_id, 
+            'cycle_number', p_cycle_number,
+            'user_id', v_user_id, 
+            'executive_role_id', v_executive_role_id,
+            'role_title', p_role_title,
+            'rank_level', p_rank_level,
+            'program_id', v_program_id
+        ),
+        CURRENT_TIMESTAMP
+    );
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE UpdateExecutiveMember(
+    IN p_organization_id INT,
+    IN p_cycle_number INT,
+    IN p_email VARCHAR(100),
+    IN p_program_name VARCHAR(50),
+    IN p_role_title VARCHAR(100),
+    IN p_rank_level INT,
+    IN p_action_by_email VARCHAR(100)
+)
+BEGIN
+    DECLARE v_user_id VARCHAR(200);
+    DECLARE v_role_id INT;
+    DECLARE v_rank_id INT;
+    DECLARE v_executive_role_id INT;
+    DECLARE v_program_id INT;
+    DECLARE v_action_by_user_id VARCHAR(200);
+
+    -- Look up program_id from program name
+    SELECT program_id INTO v_program_id
+    FROM tbl_program
+    WHERE name = p_program_name
+    LIMIT 1;
+
+    IF v_program_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Program not found';
+    END IF;
+
+    -- Get user_id of the action performer
+    SELECT user_id INTO v_action_by_user_id
+    FROM tbl_user
+    WHERE email = p_action_by_email
+    LIMIT 1;
+
+    IF v_action_by_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Action performer not found';
+    END IF;
+
+    -- Get user_id of executive member
+    SELECT user_id INTO v_user_id
+    FROM tbl_user
+    WHERE email = p_email
+    LIMIT 1;
+
+    IF v_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Executive member not found';
+    END IF;
+
+    -- Get role_id for 'Student'
+    SELECT role_id INTO v_role_id
+    FROM tbl_role
+    WHERE LOWER(role_name) = 'student'
+    LIMIT 1;
+
+    -- Get rank_id from the specified rank level
+    SELECT rank_id INTO v_rank_id
+    FROM tbl_executive_rank
+    WHERE rank_level = p_rank_level
+    LIMIT 1;
+
+    IF v_rank_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Invalid rank level';
+    END IF;
+
+    -- Update user program and role if needed
+    UPDATE tbl_user
+    SET program_id = v_program_id, role_id = v_role_id
+    WHERE user_id = v_user_id;
+
+    -- Update executive role or create if not exists
+    SELECT executive_role_id INTO v_executive_role_id
+    FROM tbl_executive_role
+    WHERE organization_id = p_organization_id
+      AND cycle_number = p_cycle_number
+      AND role_title = p_role_title
+      AND rank_id = v_rank_id
+    LIMIT 1;
+
+    IF v_executive_role_id IS NULL THEN
+        INSERT INTO tbl_executive_role (
+            organization_id,
+            cycle_number,
+            role_title,
+            rank_id,
+            created_at
+        ) VALUES (
+            p_organization_id,
+            p_cycle_number,
+            p_role_title,
+            v_rank_id,
+            CURRENT_TIMESTAMP
+        );
+        SET v_executive_role_id = LAST_INSERT_ID();
+    END IF;
+
+    -- Update organization member's executive role
+    UPDATE tbl_organization_members
+    SET executive_role_id = v_executive_role_id
+    WHERE organization_id = p_organization_id
+      AND cycle_number = p_cycle_number
+      AND user_id = v_user_id
+      AND member_type = 'Executive';
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type,
+        meta_data,
+        timestamp
+    ) VALUES (
+        v_action_by_user_id,
+        CONCAT('Updated executive member: ', v_user_id, ' (', p_email, ') as ', p_role_title),
+        'executive_member_update',
+        JSON_OBJECT(
+            'organization_id', p_organization_id,
+            'cycle_number', p_cycle_number,
+            'user_id', v_user_id,
+            'executive_role_id', v_executive_role_id,
+            'role_title', p_role_title,
+            'rank_level', p_rank_level,
+            'program_id', v_program_id
+        ),
+        CURRENT_TIMESTAMP
+    );
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE ArchiveExecutiveMember(
+    IN p_organization_id INT,
+    IN p_cycle_number INT,
+    IN p_email VARCHAR(100),
+    IN p_action_by_email VARCHAR(100)
+)
+BEGIN
+    DECLARE v_user_id VARCHAR(200);
+    DECLARE v_member_id INT;
+    DECLARE v_executive_role_id INT;
+    DECLARE v_archived_by VARCHAR(200);
+
+    -- Get user_id of executive member
+    SELECT user_id INTO v_user_id
+    FROM tbl_user
+    WHERE email = p_email
+    LIMIT 1;
+
+    IF v_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Executive member not found';
+    END IF;
+
+    -- Get member_id and executive_role_id
+    SELECT member_id, executive_role_id INTO v_member_id, v_executive_role_id
+    FROM tbl_organization_members
+    WHERE organization_id = p_organization_id
+      AND cycle_number = p_cycle_number
+      AND user_id = v_user_id
+      AND member_type = 'Executive'
+    LIMIT 1;
+
+    IF v_member_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Executive membership not found';
+    END IF;
+
+    -- Get user_id of the action performer
+    SELECT user_id INTO v_archived_by
+    FROM tbl_user
+    WHERE email = p_action_by_email
+    LIMIT 1;
+
+    IF v_archived_by IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Action performer not found';
+    END IF;
+
+    -- Archive the executive member
+    INSERT INTO tbl_archived_organization_members (
+        member_id,
+        organization_id,
+        cycle_number,
+        user_id,
+        member_type,
+        executive_role_id,
+        archived_by
+    ) VALUES (
+        v_member_id,
+        p_organization_id,
+        p_cycle_number,
+        v_user_id,
+        'Executive',
+        v_executive_role_id,
+        v_archived_by
+    );
+
+    -- Remove from active members
+    DELETE FROM tbl_organization_members
+    WHERE member_id = v_member_id;
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id,
+        action,
+        type,
+        meta_data,
+        timestamp
+    ) VALUES (
+        v_archived_by,
+        CONCAT('Archived executive member: ', v_user_id, ' (', p_email, ') from org ', p_organization_id),
+        'executive_member_archive',
+        JSON_OBJECT(
+            'organization_id', p_organization_id,
+            'cycle_number', p_cycle_number,
+            'user_id', v_user_id,
+            'member_id', v_member_id,
+            'executive_role_id', v_executive_role_id
+        ),
+        CURRENT_TIMESTAMP
+    );
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetAllPrograms()
+BEGIN
+    SELECT * FROM tbl_program;
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetOrganizationCommittees(
+    IN p_organization_id INT,
+    IN p_cycle_number INT)
+BEGIN
+    -- Validate organization exists
+    IF NOT EXISTS (
+        SELECT 1 FROM tbl_organization 
+        WHERE organization_id = p_organization_id
+    ) THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Organization not found';
+    END IF;
+
+    -- Validate cycle exists
+    IF NOT EXISTS (
+        SELECT 1 FROM tbl_renewal_cycle 
+        WHERE organization_id = p_organization_id 
+        AND cycle_number = p_cycle_number
+    ) THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Renewal cycle not found';
+    END IF;
+
+    -- Get all committees with member counts
+    SELECT 
+        c.committee_id,
+        c.name AS committee_name,
+        c.description,
+        c.created_at,
+        COUNT(cm.user_id) AS member_count,
+        (SELECT COUNT(*) FROM tbl_committee_members 
+         WHERE committee_id = c.committee_id AND role = 'Committee Head') AS head_count
+    FROM tbl_committee c
+    LEFT JOIN tbl_committee_members cm ON c.committee_id = cm.committee_id
+    WHERE c.organization_id = p_organization_id
+    AND c.cycle_number = p_cycle_number
+    GROUP BY c.committee_id, c.name, c.description, c.created_at
+    ORDER BY c.name;
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE CreateCommittee(
+    IN p_organization_id INT,
+    IN p_cycle_number INT,
+    IN p_committee_name VARCHAR(100),
+    IN p_description TEXT,
+    IN p_action_by_email VARCHAR(100)
+)
+BEGIN
+    DECLARE v_action_by_user_id VARCHAR(200);
+    DECLARE v_organization_exists INT;
+    DECLARE v_cycle_exists INT;
+    DECLARE v_committee_exists INT;
+    DECLARE v_new_committee_id INT;
+
+    -- Validate organization exists and is active
+    SELECT COUNT(*) INTO v_organization_exists 
+    FROM tbl_organization 
+    WHERE organization_id = p_organization_id 
+    AND status IN ('Approved', 'Renewal');
+    
+    IF v_organization_exists = 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Organization not found or not active';
+    END IF;
+
+    -- Validate renewal cycle exists
+    SELECT COUNT(*) INTO v_cycle_exists 
+    FROM tbl_renewal_cycle 
+    WHERE organization_id = p_organization_id 
+    AND cycle_number = p_cycle_number;
+    
+    IF v_cycle_exists = 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Renewal cycle not found';
+    END IF;
+
+    -- Check if committee already exists for this org/cycle
+    SELECT COUNT(*) INTO v_committee_exists
+    FROM tbl_committee
+    WHERE organization_id = p_organization_id
+    AND cycle_number = p_cycle_number
+    AND name = p_committee_name;
+    
+    IF v_committee_exists > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Committee with this name already exists';
+    END IF;
+
+    -- Get user_id of the action performer
+    SELECT user_id INTO v_action_by_user_id 
+    FROM tbl_user 
+    WHERE email = p_action_by_email 
+    LIMIT 1;
+
+    IF v_action_by_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Action performer not found';
+    END IF;
+
+    -- Create the committee
+    INSERT INTO tbl_committee (
+        organization_id,
+        cycle_number,
+        name,
+        description,
+        created_at
+    ) VALUES (
+        p_organization_id,
+        p_cycle_number,
+        p_committee_name,
+        p_description,
+        CURRENT_TIMESTAMP
+    );
+    
+    SET v_new_committee_id = LAST_INSERT_ID();
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id, 
+        action, 
+        type, 
+        meta_data,
+        timestamp
+    ) VALUES (
+        v_action_by_user_id,
+        CONCAT('Created committee: ', p_committee_name),
+        'committee_creation',
+        JSON_OBJECT(
+            'organization_id', p_organization_id,
+            'cycle_number', p_cycle_number,
+            'committee_id', v_new_committee_id,
+            'committee_name', p_committee_name
+        ),
+        CURRENT_TIMESTAMP
+    );
+    
+    -- Return the new committee ID
+    SELECT v_new_committee_id AS committee_id;
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE UpdateCommittee(
+    IN p_committee_id INT,
+    IN p_new_name VARCHAR(100),
+    IN p_new_description TEXT,
+    IN p_action_by_email VARCHAR(100))
+BEGIN
+    DECLARE v_action_by_user_id VARCHAR(200);
+    DECLARE v_committee_exists INT;
+    DECLARE v_organization_id INT;
+    DECLARE v_cycle_number INT;
+    DECLARE v_current_name VARCHAR(100);
+    DECLARE v_current_description TEXT;
+
+    -- Check if committee exists and get current values
+   SELECT  
+        organization_id, 
+        cycle_number, 
+        name,
+        description
+    INTO 
+        v_organization_id, 
+        v_cycle_number,
+        v_current_name,
+        v_current_description
+    FROM tbl_committee
+    WHERE committee_id = p_committee_id;
+
+    IF v_organization_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Committee not found';
+    END IF;
+
+    -- Check if new name already exists for this org/cycle
+    IF p_new_name IS NOT NULL AND p_new_name <> v_current_name THEN
+        SELECT COUNT(*) INTO v_committee_exists
+        FROM tbl_committee
+        WHERE organization_id = v_organization_id
+        AND cycle_number = v_cycle_number
+        AND name = p_new_name;
+        
+        IF v_committee_exists > 0 THEN
+            SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Committee with this name already exists';
+        END IF;
+    END IF;
+
+    -- Get user_id of the action performer
+    SELECT user_id INTO v_action_by_user_id 
+    FROM tbl_user 
+    WHERE email = p_action_by_email 
+    LIMIT 1;
+
+    IF v_action_by_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Action performer not found';
+    END IF;
+
+    -- Update the committee
+    UPDATE tbl_committee
+    SET 
+        name = COALESCE(p_new_name, name),
+        description = COALESCE(p_new_description, description)
+    WHERE committee_id = p_committee_id;
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id, 
+        action, 
+        type, 
+        meta_data,
+        timestamp
+    ) VALUES (
+        v_action_by_user_id,
+        CONCAT('Updated committee: ', v_current_name, 
+               CASE WHEN p_new_name IS NOT NULL AND p_new_name <> v_current_name 
+                    THEN CONCAT(' to ', p_new_name) 
+                    ELSE '' END),
+        'committee_update',
+        JSON_OBJECT(
+            'committee_id', p_committee_id,
+            'old_name', v_current_name,
+            'new_name', COALESCE(p_new_name, v_current_name),
+            'old_description', v_current_description,
+            'new_description', COALESCE(p_new_description, v_current_description),
+            'organization_id', v_organization_id,
+            'cycle_number', v_cycle_number
+        ),
+        CURRENT_TIMESTAMP
+    );
+    
+    SELECT ROW_COUNT() AS rows_affected;
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE ArchiveCommittee(
+    IN p_committee_id INT,
+    IN p_reason VARCHAR(255),
+    IN p_archived_by_email VARCHAR(100))
+BEGIN
+    DECLARE v_archived_by_id VARCHAR(200);
+    DECLARE v_committee_exists INT;
+    DECLARE v_organization_id INT;
+    DECLARE v_cycle_number INT;
+    DECLARE v_committee_name VARCHAR(100);
+    DECLARE v_committee_description TEXT;
+    DECLARE v_created_at TIMESTAMP;
+    DECLARE v_member_count INT;
+
+    -- Check if committee exists
+   SELECT organization_id, cycle_number, name, description, created_at
+    INTO v_organization_id, v_cycle_number, v_committee_name, v_committee_description, v_created_at
+    FROM tbl_committee
+    WHERE committee_id = p_committee_id;
+
+    IF v_organization_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Committee not found';
+    END IF;
+
+    -- Get user_id of the archiver
+    SELECT user_id INTO v_archived_by_id 
+    FROM tbl_user 
+    WHERE email = p_archived_by_email 
+    LIMIT 1;
+
+    IF v_archived_by_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Archiving user not found';
+    END IF;
+
+    -- Count members in this committee
+    SELECT COUNT(*) INTO v_member_count
+    FROM tbl_committee_members
+    WHERE committee_id = p_committee_id;
+
+    -- Start transaction
+    START TRANSACTION;
+
+    -- Archive committee members first
+    INSERT INTO tbl_archived_organization_members (
+        member_id,
+        organization_id,
+        cycle_number,
+        user_id,
+        member_type,
+        committee_id,
+        committee_role,
+        archived_at,
+        archived_by
+    )
+    SELECT 
+        cm.committee_member_id,
+        v_organization_id,
+        v_cycle_number,
+        cm.user_id,
+        'Committee',
+        p_committee_id,
+        cm.role,
+        CURRENT_TIMESTAMP,
+        v_archived_by_id
+    FROM tbl_committee_members cm
+    WHERE cm.committee_id = p_committee_id;
+
+    -- Archive the committee
+    INSERT INTO tbl_archived_committees (
+        original_committee_id,
+        organization_id,
+        cycle_number,
+        name,
+        description,
+        created_at,
+        archived_at,
+        archived_by,
+        reason
+    ) VALUES (
+        p_committee_id,
+        v_organization_id,
+        v_cycle_number,
+        v_committee_name,
+        v_committee_description,
+        v_created_at,
+        CURRENT_TIMESTAMP,
+        v_archived_by_id,
+        p_reason
+    );
+
+    -- Delete committee members
+    DELETE FROM tbl_committee_members WHERE committee_id = p_committee_id;
+
+    -- Delete committee roles and permissions
+    DELETE crp FROM tbl_committee_role_permission crp
+    JOIN tbl_committee_role cr ON crp.committee_role_id = cr.committee_role_id
+    WHERE cr.committee_id = p_committee_id;
+
+    -- Delete committee roles
+    DELETE FROM tbl_committee_role WHERE committee_id = p_committee_id;
+
+    -- Finally, delete the committee
+    DELETE FROM tbl_committee WHERE committee_id = p_committee_id;
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id, 
+        action, 
+        type, 
+        meta_data,
+        timestamp
+    ) VALUES (
+        v_archived_by_id,
+        CONCAT('Archived committee: ', v_committee_name, ' (', v_member_count, ' members)'),
+        'committee_archive',
+        JSON_OBJECT(
+            'original_committee_id', p_committee_id,
+            'committee_name', v_committee_name,
+            'organization_id', v_organization_id,
+            'cycle_number', v_cycle_number,
+            'member_count', v_member_count,
+            'reason', p_reason
+        ),
+        CURRENT_TIMESTAMP
+    );
+
+    COMMIT;
+    
+    SELECT ROW_COUNT() AS committees_archived;
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetCommitteeMembers(
+    IN p_committee_id INT)
+BEGIN
+    DECLARE v_committee_exists INT;
+    DECLARE v_committee_name VARCHAR(100);
+    DECLARE v_organization_id INT;
+    DECLARE v_cycle_number INT;
+
+    -- Check if committee exists and get basic info
+    SELECT 
+        COUNT(*), 
+        name, 
+        organization_id, 
+        cycle_number
+    INTO 
+        v_committee_exists, 
+        v_committee_name,
+        v_organization_id,
+        v_cycle_number
+    FROM tbl_committee
+    WHERE committee_id = p_committee_id;
+    
+    IF v_committee_exists = 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Committee not found';
+    END IF;
+
+    -- Return committee info
+    SELECT 
+        p_committee_id AS committee_id,
+        v_committee_name AS committee_name,
+        v_organization_id AS organization_id,
+        v_cycle_number AS cycle_number;
+
+    -- Return all members with their details
+    SELECT 
+        cm.committee_member_id,
+        cm.role,
+        cm.created_at AS member_since,
+        u.user_id,
+        u.f_name,
+        u.l_name,
+        u.email,
+        u.profile_picture,
+        p.name AS program_name,
+        u.status AS user_status
+    FROM tbl_committee_members cm
+    JOIN tbl_user u ON cm.user_id = u.user_id
+    LEFT JOIN tbl_program p ON u.program_id = p.program_id
+    WHERE cm.committee_id = p_committee_id
+    ORDER BY 
+        CASE WHEN cm.role = 'Committee Head' THEN 0 ELSE 1 END,
+        u.l_name, u.f_name;
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE AddCommitteeMember(
+    IN p_committee_id INT,
+    IN p_user_email VARCHAR(100),
+    IN p_role ENUM('Committee Head', 'Committee Officer'),
+    IN p_action_by_email VARCHAR(100))
+BEGIN
+    DECLARE v_action_by_user_id VARCHAR(200);
+    DECLARE v_user_id VARCHAR(200);
+    DECLARE v_committee_exists INT;
+    DECLARE v_organization_id INT;
+    DECLARE v_cycle_number INT;
+    DECLARE v_is_member INT;
+    DECLARE v_new_member_id INT;
+
+    -- Check if committee exists
+    SELECT COUNT(*), organization_id, cycle_number 
+    INTO v_committee_exists, v_organization_id, v_cycle_number
+    FROM tbl_committee
+    WHERE committee_id = p_committee_id;
+    
+    IF v_committee_exists = 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Committee not found';
+    END IF;
+
+    -- Get user_id of the action performer
+    SELECT user_id INTO v_action_by_user_id 
+    FROM tbl_user 
+    WHERE email = p_action_by_email 
+    LIMIT 1;
+
+    IF v_action_by_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Action performer not found';
+    END IF;
+
+    -- Get user_id of the member to add
+    SELECT user_id INTO v_user_id 
+    FROM tbl_user 
+    WHERE email = p_user_email 
+    LIMIT 1;
+
+    IF v_user_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'User to add not found';
+    END IF;
+
+    -- Check if user is already in this committee
+    SELECT COUNT(*) INTO v_is_member
+    FROM tbl_committee_members
+    WHERE committee_id = p_committee_id
+    AND user_id = v_user_id;
+    
+    IF v_is_member > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'User is already a member of this committee';
+    END IF;
+
+    -- Add the committee member
+    INSERT INTO tbl_committee_members (
+        committee_id,
+        user_id,
+        role,
+        created_at
+    ) VALUES (
+        p_committee_id,
+        v_user_id,
+        p_role,
+        CURRENT_TIMESTAMP
+    );
+    
+    SET v_new_member_id = LAST_INSERT_ID();
+
+    -- Log the action
+    INSERT INTO tbl_logs (
+        user_id, 
+        action, 
+        type, 
+        meta_data,
+        timestamp
+    ) VALUES (
+        v_action_by_user_id,
+        CONCAT('Added member to committee: ', 
+               (SELECT name FROM tbl_committee WHERE committee_id = p_committee_id)),
+        'committee_member_add',
+        JSON_OBJECT(
+            'committee_id', p_committee_id,
+            'user_id', v_user_id,
+            'role', p_role,
+            'organization_id', v_organization_id,
+            'cycle_number', v_cycle_number
+        ),
+        CURRENT_TIMESTAMP
+    );
+    
+    SELECT v_new_member_id AS committee_member_id;
+END$$
+DELIMITER ;
+
+
 -- INDEXES
 
 CREATE INDEX idx_org_members_user ON tbl_organization_members(user_id);
@@ -4626,6 +5848,10 @@ VALUES
 (4,8),
 (4,9),
 (4,10),
+(4,11),
+(4,12),
+(4,13),
+(4,14),
 (4,15),
 (4,17),
 (4,19),
@@ -4650,11 +5876,12 @@ INSERT INTO tbl_program (name, description) VALUES
 
 INSERT INTO tbl_user (user_id, f_name, l_name, email, program_id, role_id) VALUES
 ("900f929ec408cb4", "Benson","Javier","benson09.javier@outlook.com", 1 , 1),
-("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 5),
-("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,4),
+("5fb95ed0a0d20daf", "Geraldine","Aris","arisgeraldine@outlook.com", null, 6),
+("6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0", "Benson","Javier","javierbb@students.nu-dasma.edu.ph",null,5),
 ("cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k", "Carl Roehl", "Falcon", "falconcs@students.nu-dasma.edu.ph", 1, 3),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Samantha Joy", "Madrunio", "madruniosm@students.nu-dasma.edu.ph", 1, 2),
 ("_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU", "Geraldine", "Aris", "arisgc@students.nu-dasma.edu.ph",null, 4);
+
 
 
 INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
@@ -4666,6 +5893,7 @@ INSERT INTO tbl_executive_rank (rank_level, default_title, description) VALUES
 
 
 INSERT INTO tbl_organization (adviser_id, name, description, base_program_id, status, membership_fee_type, membership_fee_amount, is_recruiting, is_open_to_all_courses) VALUES
+("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "NU Dasmariñas Student Development and Activities Office", "SDAO", null, "Approved", "Whole Academic Year", 0, 0, 1),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Computer Society", "This is the computer society", 1, "Approved", "Whole Academic Year", 500, 0, 0),
 ("LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA", "Isite","This is Isite", 2, "Approved", "Whole Academic Year", 500,0,0);
 
@@ -4789,4 +6017,185 @@ INSERT INTO tbl_event_application_requirement (
 ('Event Photos', 'post-event', 'requirement-1747711179629-Letter-from-the-College-Dean.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:39', '2025-05-20 11:19:39'),
 ('Narrative Report', 'post-event', 'requirement-1747711196157-List-of-Members.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:19:56', '2025-05-20 11:19:56'),
 ('Financial Report', 'post-event', 'requirement-1747711230696-Latest-Certificate-of-Grades-of-Officers.pdf', '6mfvyVan6vlls4M78nSj7B5cGt1B7-bSSvPLzT28CQ0', '2025-05-20 11:20:30', '2025-05-20 11:20:30');
+
+CALL CreateOrganizationApplication(
+    '{
+        "organization_name": "Data Science Club",
+        "organization_description": "Club for data science enthusiasts",
+        "organization_logo": "ds-club-logo.png",
+        "fee_duration": "Free",
+        "fee_amount": null,
+        "category": "Extra Curricular Organization"
+    }',
+    '[{
+        "f_name": "Alex",
+        "l_name": "Johnson",
+        "role_name": "President",
+        "nu_email": "alex.johnson@students.nu-dasma.edu.ph",
+        "rank_number": 5
+    }, {
+        "f_name": "Maria",
+        "l_name": "Garcia",
+        "role_name": "Vice President",
+        "nu_email": "maria.garcia@students.nu-dasma.edu.ph",
+        "rank_number": 4
+    }]',
+    '[{
+        "requirement_id": 1,
+        "requirement_path": "letter-of-intent-ds.pdf"
+    }, {
+        "requirement_id": 2,
+        "requirement_path": "application-form-ds.pdf"
+    }]',
+    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA'  -- Samantha's user_id with Adviser role
+);
+
+
+CALL ApproveApplication(
+    2,                    -- approval_id
+    'Looks good, approved', -- comment
+    4,                    -- organization_id
+    1                     -- application_id
+);
+
+CALL ApproveApplication(
+    3,                    -- approval_id
+    'Looks good, approved', -- comment
+    4,                    -- organization_id
+    1                     -- application_id
+);
+
+CALL ApproveApplication(
+    4,                    -- approval_id
+    'Looks good, approved', -- comment
+    4,                    -- organization_id
+    1                     -- application_id
+);
+
+CALL ApproveApplication(
+    5,                    -- approval_id
+    'Looks good, approved', -- comment
+    4,                    -- organization_id
+    1                     -- application_id
+);
+
+CALL CreateEventApplication(
+    4,  -- organization_id
+    1,  -- cycle_number
+    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', -- applicant_user_id
+    '{
+        "title": "for reject",
+        "description": "Annual technology conference",
+        "venue_type": "Face to face",
+        "venue": "NU Dasma Campus",
+        "start_date": "2025-11-15",
+        "end_date": "2025-11-17",
+        "start_time": "09:00:00",
+        "end_time": "17:00:00",
+        "type": "Paid",
+        "is_open_to": "Open to all",
+        "fee": 500,
+        "capacity": 200
+    }',
+    '[
+        {"requirement_id": 1, "file_path": "uploads/proposal.pdf"},
+        {"requirement_id": 2, "file_path": "uploads/program_flow.pdf"},
+        {"requirement_id": 3, "file_path": "uploads/budget.xlsx"}
+    ]'
+);
+
+CALL ApproveEventApplication(
+    1,                        -- approval_id
+    'Looks good, approved',   -- comment
+    1,                      -- event_application_id
+    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA' -- user_id
+);
+
+CALL ApproveEventApplication(
+    2,                        -- approval_id
+    'Looks good, approved',   -- comment
+    1,                      -- event_application_id
+    'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k' -- user_id
+);
+
+CALL ApproveEventApplication(
+    3,                        -- approval_id
+    'Looks good, approved',   -- comment
+    1,                      -- event_application_id
+    '5fb95ed0a0d20daf' -- user_id
+);
+
+CALL ApproveEventApplication(
+    4,                        -- approval_id
+    'Looks good, approved',   -- comment
+    1,                      -- event_application_id
+    '900f929ec408cb4' -- user_id
+);
+
+CALL ApproveEventApplication(
+    5,                        -- approval_id
+    'Looks good, approved',   -- comment
+    1,                      -- event_application_id
+    '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU' -- user_id
+);
+
+CALL CreateEventApplication(
+    4,  -- organization_id
+    1,  -- cycle_number
+    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA', -- applicant_user_id
+    '{
+        "title": "Past Workshop Example",
+        "description": "Web development workshop for beginners",
+        "venue_type": "Face to face",
+        "venue": "NU Dasma Computer Lab",
+        "start_date": "2025-05-10", 
+        "end_date": "2025-05-12", 
+        "start_time": "13:00:00",
+        "end_time": "16:00:00",
+        "type": "Free",
+        "is_open_to": "Open to all",
+        "fee": 0,
+        "capacity": 30
+    }',
+    '[
+        {"requirement_id": 1, "file_path": "uploads/workshop_proposal.pdf"},
+        {"requirement_id": 2, "file_path": "uploads/workshop_schedule.pdf"},
+        {"requirement_id": 3, "file_path": "uploads/workshop_materials.pdf"}
+    ]'
+);
+
+CALL ApproveEventApplication(
+    6,                        -- approval_id
+    'Looks good, approved',   -- comment
+    2,                      -- event_application_id
+    'LBmQ-WzvRhVmb55Ucidrc14aL39ae9Ei-7xfbOrPeEA' -- user_id
+);
+
+CALL ApproveEventApplication(
+    7,                        -- approval_id
+    'Looks good, approved',   -- comment
+    2,                      -- event_application_id
+    'cyQuRJT6GaT0Y89NFQua6nMhFJF6E-SAIk_rpryVY1k' -- user_id
+);
+
+CALL ApproveEventApplication(
+    8,                        -- approval_id
+    'Looks good, approved',   -- comment
+    2,                      -- event_application_id
+    '5fb95ed0a0d20daf' -- user_id
+);
+
+CALL ApproveEventApplication(
+    9,                        -- approval_id
+    'Looks good, approved',   -- comment
+    2,                      -- event_application_id
+    '900f929ec408cb4' -- user_id
+);
+
+CALL ApproveEventApplication(
+    10,                        -- approval_id
+    'Looks good, approved',   -- comment
+    2,                      -- event_application_id
+    '_ExbgMDtE-90mt0wLlA74VFYH5I1freBLw4NMY9RcBU' -- user_id
+);
 

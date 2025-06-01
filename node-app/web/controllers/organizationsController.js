@@ -299,6 +299,335 @@ async function getOrganizationsByStatus(req, res) {
     }
 }
 
+async function getOrganizationEventApplications(req, res) {
+    try {
+        const org_name = req.query.org_name;
+        if (!org_name) {
+            return res.status(400).json({ message: 'org_name is required.' });
+        }
+        const result = await organizationsModel.getOrganizationEventApplications(org_name);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching organization event applications.",
+        });
+    }
+}
+
+async function getEventRequirementSubmissionsByOrganization(req, res) {
+    try {
+        let organization_id = parseInt(req.query.organization_id);
+        const org_name = req.query.org_name;
+
+        // If org_name is provided, look up organization_id using the model function
+        if (!organization_id && org_name) {
+            organization_id = await organizationsModel.getOrganizationIdByName(org_name);
+            if (!organization_id) {
+                return res.status(404).json({ message: 'Organization not found.' });
+            }
+        }
+
+        if (!organization_id) {
+            return res.status(400).json({ message: 'organization_id or org_name is required.' });
+        }
+
+        const submissions = await organizationsModel.getEventRequirementSubmissionsByOrganization(organization_id);
+        res.json(submissions);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching event requirement submissions by organization.",
+        });
+    }
+}
+
+async function getOrganizationDashboardStats(req, res) {
+    try {
+        let organization_id = parseInt(req.query.organization_id);
+        const org_name = req.query.org_name;
+
+        // If org_name is provided, look up organization_id using the model function
+        if (!organization_id && org_name) {
+            organization_id = await organizationsModel.getOrganizationIdByName(org_name);
+            if (!organization_id) {
+                return res.status(404).json({ message: 'Organization not found.' });
+            }
+        }
+
+        if (!organization_id) {
+            return res.status(400).json({ message: 'organization_id or org_name is required.' });
+        }
+
+        const stats = await organizationsModel.getOrganizationDashboardStats(organization_id);
+        res.json(stats);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching organization dashboard stats.",
+        });
+    }
+}
+
+async function createExecutiveMember(req, res) {
+    try {
+        // Log the incoming request body and user
+        console.log('Add Executive Member Request:', {
+            body: req.body,
+            user: req.user
+        });
+
+        const {
+            organization_id,
+            cycle_number,
+            email,
+            program_name,
+            role_title,
+            rank_level
+        } = req.body;
+
+        const action_by_email = req.user.email;
+
+        const result = await organizationsModel.createExecutiveMember({
+            organization_id,
+            cycle_number,
+            email,
+            program_name,
+            role_title,
+            rank_level,
+            action_by_email
+        });
+
+        res.status(201).json({
+            message: result.message
+        });
+    } catch (error) {
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while adding executive member.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
+
+async function updateExecutiveMember(req, res) {
+    try {
+        console.log('Update Executive Member Request:', {
+            body: req.body,
+            user: req.user
+        });
+
+        const {
+            organization_id,
+            cycle_number,
+            email,
+            program_name,
+            role_title,
+            rank_level
+        } = req.body;
+
+        const action_by_email = req.user.email;
+
+        const result = await organizationsModel.updateExecutiveMember({
+            organization_id,
+            cycle_number,
+            email,
+            program_name,
+            role_title,
+            rank_level,
+            action_by_email
+        });
+
+        res.status(200).json({
+            message: result.message
+        });
+    } catch (error) {
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while updating executive member.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
+
+async function archiveExecutiveMember(req, res) {
+    try {
+        console.log('Archive Executive Member Request:', {
+            body: req.body,
+            user: req.user
+        });
+
+        const {
+            organization_id,
+            cycle_number,
+            email
+        } = req.body;
+
+        const action_by_email = req.user.email;
+
+        const result = await organizationsModel.archiveExecutiveMember({
+            organization_id,
+            cycle_number,
+            email,
+            action_by_email
+        });
+
+        res.status(200).json({
+            message: result.message
+        });
+    } catch (error) {
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while archiving executive member.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
+
+async function getOrganizationCommittees(req, res) {
+    try {
+        const { organization_id, cycle_number } = req.query;
+        if (!organization_id || !cycle_number) {
+            return res.status(400).json({ error: "organization_id and cycle_number are required." });
+        }
+        const committees = await organizationsModel.getOrganizationCommittees(organization_id, cycle_number);
+        res.json(committees);
+    } catch (error) {
+        res.status(500).json({
+            error: error.message || "An error occurred while fetching organization committees.",
+        });
+    }
+}
+
+async function createCommittee(req, res) {
+    try {
+        const {
+            organization_id,
+            cycle_number,
+            committee_name,
+            description
+        } = req.body;
+
+        const action_by_email = req.user.email;
+
+        const result = await organizationsModel.createCommittee({
+            organization_id,
+            cycle_number,
+            committee_name,
+            description,
+            action_by_email
+        });
+
+        res.status(201).json({
+            message: 'Committee created successfully.',
+            committee_id: result.committee_id
+        });
+    } catch (error) {
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while creating the committee.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
+
+async function updateCommittee(req, res) {
+    try {
+        console.log('[UpdateCommittee] Request:', {
+            body: req.body,
+            user: req.user
+        });
+
+        const {
+            committee_id,
+            new_name,
+            new_description
+        } = req.body;
+
+        const action_by_email = req.user.email;
+
+        const result = await organizationsModel.updateCommittee({
+            committee_id,
+            new_name,
+            new_description,
+            action_by_email
+        });
+
+        res.status(200).json({
+            message: 'Committee updated successfully.',
+            rows_affected: result.rows_affected
+        });
+    } catch (error) {
+        console.error('[UpdateCommittee] SQL/Error:', error.sqlMessage || error.message, error);
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while updating the committee.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
+
+async function archiveCommittee(req, res) {
+    try {
+        console.log('[ArchiveCommittee] Request:', {
+            body: req.body,
+            user: req.user
+        });
+
+        const {
+            committee_id,
+            reason
+        } = req.body;
+
+        const archived_by_email = req.user.email;
+
+        const result = await organizationsModel.archiveCommittee({
+            committee_id,
+            reason,
+            archived_by_email
+        });
+
+        res.status(200).json({
+            message: 'Committee archived successfully.',
+            committees_archived: result.committees_archived
+        });
+    } catch (error) {
+        console.error('[ArchiveCommittee] SQL/Error:', error.sqlMessage || error.message, error);
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while archiving the committee.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
+
+async function getCommitteeMembers(req, res) {
+    try {
+        const { committee_id } = req.query;
+        if (!committee_id) {
+            return res.status(400).json({ error: "committee_id is required." });
+        }
+        const result = await organizationsModel.getCommitteeMembers(committee_id);
+        res.json(result);
+    } catch (error) {
+        console.error('[GetCommitteeMembers] SQL/Error:', error.sqlMessage || error.message, error);
+        res.status(400).json({
+            error: error.sqlMessage || error.message || "An error occurred while fetching committee members."
+        });
+    }
+}
+
+async function addCommitteeMember(req, res) {
+    try {
+        console.log('[AddCommitteeMember] Request:', {
+            body: req.body,
+            user: req.user
+        });
+
+        const {
+            committee_id,
+            user_email,
+            role
+        } = req.body;
+
+        const action_by_email = req.user.email;
+
+        const result = await organizationsModel.addCommitteeMember({
+            committee_id,
+            user_email,
+            role,
+            action_by_email
+        });
+
+        res.status(201).json({
+            message: 'Committee member added successfully.',
+            committee_member_id: result.committee_member_id
+        });
+    } catch (error) {
+        console.error('[AddCommitteeMember] SQL/Error:', error.sqlMessage || error.message, error);
+        const sqlMessage = error.sqlMessage || error.message || 'An error occurred while adding committee member.';
+        res.status(400).json({ error: sqlMessage });
+    }
+}
 
 module.exports = {
     getOrganizations,
@@ -315,4 +644,16 @@ module.exports = {
     archiveOrganization,
     unarchiveOrganization,
     getOrganizationsByStatus,
+    getOrganizationEventApplications,
+    getEventRequirementSubmissionsByOrganization,
+    getOrganizationDashboardStats,
+    createExecutiveMember,
+    updateExecutiveMember,
+    archiveExecutiveMember,
+    createCommittee,
+    getOrganizationCommittees,
+    updateCommittee,
+    archiveCommittee,
+    getCommitteeMembers,
+    addCommitteeMember
 };
