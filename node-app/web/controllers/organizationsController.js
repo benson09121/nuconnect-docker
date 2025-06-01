@@ -235,7 +235,14 @@ async function checkOrganizationEmails(req, res) {
         if (Array.isArray(emails) && emails.length === 1 && Array.isArray(emails[0])) {
             emailList = emails[0];
         }
-        const exists = await organizationsModel.checkOrganizationEmails(JSON.stringify(emailList));
+        // Ensure emailList is a real array of strings
+        if (!Array.isArray(emailList)) {
+            return res.status(400).json({ message: 'Emails must be an array' });
+        }
+        // Pass as a JSON string (not a stringified array string)
+        const jsonEmails = JSON.stringify(emailList);
+        // Remove any extra escaping (should not be present if JSON.stringify is used on an array)
+        const exists = await organizationsModel.checkOrganizationEmails(jsonEmails);
         res.json({ exists });
     } catch (error) {
         res.status(500).json({

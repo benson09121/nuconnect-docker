@@ -332,6 +332,22 @@ async function getEventCertificate(req, res) {
     }
 }
 
+async function scanTicket(req, res) {
+    try {
+        const { email, event_title } = req.body;
+        console.log('scanTicket: email:', email, 'event_title:', event_title);
+
+        const scannedTicket = await eventModel.scanTicket(email,event_title);
+        if (!scannedTicket) {
+            return res.status(404).json({ message: 'Ticket not found' });
+        }
+        console.log('scanTicket: Scanned ticket:', scannedTicket);
+        res.status(200).json(scannedTicket);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+        console.error('scanTicket: Error:', error.message);
+    }
+}
 module.exports = {
     getEvents,
     createEvent,
@@ -346,5 +362,6 @@ module.exports = {
     getEvaluation,
     submitEvaluation,
     getEventCertificate,
-    getAllEventCertificates
+    getAllEventCertificates,
+    scanTicket  
 };

@@ -14,6 +14,7 @@ router.get('/events/:eventId/user/:userId', middleware.authMiddleware, eventsCon
 router.get('/events/evaluation/:eventId', middleware.authMiddleware, eventsController.getEvaluation);
 router.post('/events/evaluation/submit', middleware.authMiddleware, eventsController.submitEvaluation);
 router.post('/events', middleware.authMiddleware, eventsController.createEvent);
+router.post('/events/scan', middleware.authMiddleware, eventsController.scanTicket);
 router.post('/events/register', middleware.authMiddleware, eventsController.registerEvent);
 router.post('/events/addcertificate', middleware.authMiddleware, eventsController.addCertificate);
 router.post('/events/generateCertificate', middleware.authMiddleware, eventsController.addGeneratedCertificate);
