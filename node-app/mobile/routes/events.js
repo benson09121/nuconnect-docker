@@ -16,7 +16,7 @@ router.post('/events/evaluation/submit', middleware.authMiddleware, eventsContro
 router.post('/events', middleware.authMiddleware, eventsController.createEvent);
 router.post('/events/scan', middleware.authMiddleware, eventsController.scanTicket);
 router.post('/events/register', middleware.authMiddleware, eventsController.registerEvent);
-router.post('/events/addcertificate', middleware.authMiddleware, eventsController.addCertificate);
+router.post('/events/addcertificate', eventsController.addCertificate);
 router.post('/events/generateCertificate', middleware.authMiddleware, eventsController.addGeneratedCertificate);
 router.put('/events/archive', middleware.authMiddleware, eventsController.archiveEvent);
 // Ensure all referenced methods exist in eventsController
