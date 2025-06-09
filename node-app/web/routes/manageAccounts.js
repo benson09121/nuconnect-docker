@@ -5,6 +5,8 @@ const middleware = require('../../middlewares/middleWare');
 
 
 router.get('/manage/accounts', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_ACCOUNT"), accountController.getAccounts);
+router.get('/manage/programs', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_ACCOUNT"), accountController.getPrograms);
+router.get('/manage/roles', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_ACCOUNT"), accountController.getRoles);
 router.post('/manage/accounts', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_ACCOUNT"), accountController.addAccount);
 router.put('/manage/accounts', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_ACCOUNT"), accountController.updateAccount);
 router.delete('/manage/accounts/:email', middleware.validateAzureJWT, middleware.hasPermission("MANAGE_ACCOUNT"), accountController.deleteAccount);

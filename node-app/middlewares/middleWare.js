@@ -30,12 +30,10 @@ const authMiddleware = async (req, res, next) => {
 
 const validateAzureJWT = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      return res.status(401).json({ error: 'Authorization header missing' });
-    }
 
-    const token = authHeader.split(' ')[1];
+    token = req.headers.authorization
+            ? req.headers.authorization.split(' ')[1]
+            : req.query.access_token;
     if (!token) {
       return res.status(401).json({ error: 'Token missing' });
     }

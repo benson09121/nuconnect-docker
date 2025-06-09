@@ -4,7 +4,7 @@ async function getAccounts() {
     const connection = await pool.getConnection();
     try {
         const [rows] = await connection.query('CALL GetManagedAccounts();');
-        return rows[0][0].result;
+        return rows[0];
     }
     catch (error) {
         console.error('Error getting permissions:', error);
@@ -78,10 +78,41 @@ async function getAccounts() {
         }
     }
 
+    async function getPrograms() {
+        const connection = await pool.getConnection();
+        try {
+            const [rows] = await connection.query('CALL GetPrograms();');
+            return rows[0];
+        }
+        catch (error) {
+            console.error('Error getting programs:', error);
+            throw error;
+        }
+        finally {
+            connection.release();
+        }
+    }
+    async function getRoles() {
+        const connection = await pool.getConnection();
+        try {
+            const [rows] = await connection.query('CALL GetRoles();');
+            return rows[0];
+        }
+        catch (error) {
+            console.error('Error getting roles:', error);
+            throw error;
+        }
+        finally {
+            connection.release();
+        }
+    }
+
 module.exports = {
     getAccounts,
     addAccount,
     updateAccount,
     deleteAccount,
-    unarchiveAccount
+    unarchiveAccount,
+    getPrograms,
+    getRoles
 };

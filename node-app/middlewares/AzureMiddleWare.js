@@ -4,7 +4,9 @@ const jwksClient = require('jwks-rsa');
 
 async function validateAzureJWT(req, res, next) {
     try {
-        const token = req.headers.authorization.split(' ')[1];
+        const token = req.headers.authorization
+            ? req.headers.authorization.split(' ')[1]
+            : req.query.access_token;
         const decoded = jwt.decode(token, { complete: true });
         
         const client = jwksClient({

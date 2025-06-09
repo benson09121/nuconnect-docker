@@ -1396,7 +1396,6 @@ END $$
 DELIMITER ;
 
 DELIMITER $$
-
 CREATE DEFINER='admin'@'%' PROCEDURE GetManagedAccounts()
 BEGIN
     DECLARE student_role_id INT;
@@ -1404,94 +1403,21 @@ BEGIN
     SELECT role_id INTO student_role_id 
     FROM tbl_role 
     WHERE LOWER(role_name) = 'student';
+    
+                SELECT u.user_id as id,
+                    CONCAT(u.f_name, ' ', u.l_name) as name,
+                    u.email,
+                    p.name as program,
+                    r.role_name as role,
+                    u.status,
+                    u.created_at,
+                    u.updated_at,
+                    u.archived_at
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
+             LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             WHERE u.role_id != student_role_id;
 
-    SELECT JSON_OBJECT(
-        'accounts', COALESCE(
-            (SELECT JSON_ARRAYAGG(
-                JSON_OBJECT(
-                    'user_id', u.user_id,
-                    'name', CONCAT(u.f_name, ' ', u.l_name),
-                    'email', u.email,
-                    'program', p.name,
-                    'role', r.role_name,
-                    'status', u.status,
-                    'created_at', u.created_at,
-                    'updated_at', u.updated_at
-                )
-             )
-             FROM tbl_user u
-             JOIN tbl_role r ON u.role_id = r.role_id
-             LEFT JOIN tbl_program p ON u.program_id = p.program_id
-             WHERE u.role_id != student_role_id
-               AND u.status = 'Active'
-            ), 
-            JSON_ARRAY()
-        ),
-        'pending_accounts', COALESCE(
-            (SELECT JSON_ARRAYAGG(
-                JSON_OBJECT(
-                    'user_id', u.user_id,
-                    'name', CONCAT(u.f_name, ' ', u.l_name),
-                    'email', u.email,
-                    'program', p.name,
-                    'role', r.role_name,
-                    'status', u.status,
-                    'created_at', u.created_at,
-                    'updated_at', u.updated_at
-                )
-             )
-             FROM tbl_user u
-             JOIN tbl_role r ON u.role_id = r.role_id
-             LEFT JOIN tbl_program p ON u.program_id = p.program_id
-             WHERE u.role_id != student_role_id
-               AND u.status = 'Pending'
-            ), 
-            JSON_ARRAY()
-        ),
-        'archive_accounts', COALESCE(
-            (SELECT JSON_ARRAYAGG(
-                JSON_OBJECT(
-                    'user_id', u.user_id,
-                    'name', CONCAT(u.f_name, ' ', u.l_name),
-                    'program', p.name,
-                    'email', u.email,
-                    'role', r.role_name,
-                    'status', u.status,
-                    'created_at', u.created_at,
-                    'archived_at', u.archived_at,
-                    'updated_at', u.updated_at
-                )
-             )
-             FROM tbl_user u
-             JOIN tbl_role r ON u.role_id = r.role_id
-             LEFT JOIN tbl_program p ON u.program_id = p.program_id
-             WHERE u.role_id != student_role_id
-               AND u.status = 'Archive'
-            ),
-            JSON_ARRAY()
-        ),
-        'programs', COALESCE(
-            (SELECT JSON_ARRAYAGG(
-                JSON_OBJECT(
-                    'program_id', p.program_id,
-                    'program_name', p.name
-                )
-             )
-             FROM tbl_program p),
-            JSON_ARRAY()
-        ),
-        'roles', COALESCE(
-            (SELECT JSON_ARRAYAGG(
-                JSON_OBJECT(
-                    'role_id', r.role_id,
-                    'role_name', r.role_name
-                )
-             )
-             FROM tbl_role r
-             WHERE r.role_id != student_role_id),
-            JSON_ARRAY()
-        )
-    ) AS result;
 END $$
 DELIMITER ;
 
@@ -1504,6 +1430,8 @@ CREATE DEFINER='admin'@'%' PROCEDURE AddManagedAccount(
 BEGIN
     DECLARE v_role_id INT;
     DECLARE v_existing_user INT DEFAULT 0;
+    DECLARE student_role_id INT;
+    
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
@@ -1512,6 +1440,9 @@ BEGIN
 
     START TRANSACTION;
 
+    SELECT role_id INTO student_role_id 
+    FROM tbl_role 
+    WHERE LOWER(role_name) = 'student';
     -- Get role ID from role name
     SELECT role_id INTO v_role_id 
     FROM tbl_role 
@@ -1571,13 +1502,25 @@ BEGIN
             'account'
         );
     END IF;
-
     COMMIT;
+
+    SELECT u.user_id as id,
+                    CONCAT(u.f_name, ' ', u.l_name) as name,
+                    u.email,
+                    p.name as program,
+                    r.role_name as role,
+                    u.status,
+                    u.created_at,
+                    u.updated_at,
+                    u.archived_at
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
+             LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             WHERE u.role_id != student_role_id AND u.email = p_email;
 END $$
 DELIMITER ;
 
 DELIMITER $$
-
 CREATE DEFINER='admin'@'%' PROCEDURE UpdateManagedAccount(
     IN p_user_id VARCHAR(200),
     IN p_email VARCHAR(100),
@@ -1633,6 +1576,20 @@ BEGIN
         'Updated managed account',
         'account'
     );
+
+        SELECT u.user_id as id,
+                    CONCAT(u.f_name, ' ', u.l_name) as name,
+                    u.email,
+                    p.name as program,
+                    r.role_name as role,
+                    u.status,
+                    u.created_at,
+                    u.updated_at,
+                    u.archived_at
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
+             LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             WHERE u.email = p_email;
 END $$
 
 DELIMITER ;
@@ -1678,6 +1635,20 @@ BEGIN
             'account'
         );
     END IF;
+
+    SELECT u.user_id as id,
+                    CONCAT(u.f_name, ' ', u.l_name) as name,
+                    u.email,
+                    p.name as program,
+                    r.role_name as role,
+                    u.status,
+                    u.created_at,
+                    u.updated_at,
+                    u.archived_at
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
+             LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             WHERE u.email = p_email;
 END $$
 
 DELIMITER ;
@@ -1718,6 +1689,19 @@ BEGIN
             'account'
         );
     END IF;
+        SELECT u.user_id as id,
+                    CONCAT(u.f_name, ' ', u.l_name) as name,
+                    u.email,
+                    p.name as program,
+                    r.role_name as role,
+                    u.status,
+                    u.created_at,
+                    u.updated_at,
+                    u.archived_at
+             FROM tbl_user u
+             JOIN tbl_role r ON u.role_id = r.role_id
+             LEFT JOIN tbl_program p ON u.program_id = p.program_id
+             WHERE u.user_id = user_id;
 END $$
 
 DELIMITER ;
@@ -6551,6 +6535,32 @@ BEGIN
     );
 END$$
 
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetPrograms()
+BEGIN
+    -- Return all programs
+    SELECT 
+        program_id,
+        name,
+        description
+    FROM tbl_program
+    ORDER BY name;
+END$$
+DELIMITER ;
+
+DELIMITER $$
+CREATE DEFINER='admin'@'%' PROCEDURE GetRoles()
+BEGIN
+    -- Return all roles
+    SELECT 
+        role_id,
+        role_name
+    FROM tbl_role 
+    WHERE is_approver = 1
+    ORDER BY hierarchy_order;
+END$$
 DELIMITER ;
 
 
